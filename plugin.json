@@ -10,7 +10,7 @@
     "url": "/owox",
     "actions": {
       "list-data-marts": {},
-      "slow-count": { "timeoutSeconds": 5 },
+      "slow-count": { "timeoutSeconds": 180 },
       "fail": {},
       "read-rows": {
         "input": {
