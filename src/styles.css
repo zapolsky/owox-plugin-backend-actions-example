@@ -1,0 +1,119 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1f2933;
+  --muted: #616e7c;
+  --border: #d9dee3;
+  --accent: #1e6fd9;
+  --ok: #1f7a3d;
+  --error: #c62828;
+  --code-bg: #f4f6f8;
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --bg: #15191e;
+  --fg: #e4e7eb;
+  --muted: #9aa5b1;
+  --border: #323a44;
+  --accent: #5c9cf0;
+  --ok: #5fc27e;
+  --error: #ef7b7b;
+  --code-bg: #1e242b;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 system-ui, sans-serif;
+}
+
+main {
+  max-width: 960px;
+  padding: 16px;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0 0 16px;
+}
+
+h2 {
+  font-size: 15px;
+  margin: 24px 0 8px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+}
+
+input {
+  min-width: 280px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+button {
+  padding: 6px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #ffffff;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.hint {
+  color: var(--muted);
+}
+
+.log {
+  padding: 0;
+  list-style: none;
+}
+
+.log li {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.state {
+  font-weight: 600;
+}
+
+.ok .state {
+  color: var(--ok);
+}
+
+.error .state {
+  color: var(--error);
+}
+
+pre {
+  overflow-x: auto;
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--code-bg);
+}

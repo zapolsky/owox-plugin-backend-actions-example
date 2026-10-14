@@ -1,0 +1,25 @@
+{
+  "name": "Backend Actions Example",
+  "description": "Runs example backend actions on a Cloudflare Worker: lists Data Marts, counts for two minutes, fails on purpose and reads Data Mart rows",
+  "delivery": {
+    "type": "remote",
+    "url": "https://owox-plugin-backend-actions-example.e-zapolskiy.workers.dev/"
+  },
+  "credentials": [],
+  "backend": {
+    "url": "/owox",
+    "actions": {
+      "list-data-marts": {},
+      "slow-count": { "timeoutSeconds": 180 },
+      "fail": {},
+      "read-rows": {
+        "input": {
+          "type": "object",
+          "required": ["dataMartId"],
+          "properties": { "dataMartId": { "type": "string", "minLength": 1 } },
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}

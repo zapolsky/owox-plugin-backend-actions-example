@@ -1,0 +1,6 @@
+name = "owox-plugin-backend-actions-example"
+main = "worker/index.ts"
+compatibility_date = "2026-10-01"
+
+[assets]
+directory = "./dist"

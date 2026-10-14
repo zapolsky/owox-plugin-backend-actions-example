@@ -1,0 +1,28 @@
+{
+  "name": "owox-plugin-backend-actions-example",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@owox/api-client": "file:vendor/owox-api-client-0.38.0.tgz",
+    "@owox/plugin-sdk": "file:vendor/owox-plugin-sdk-0.38.0.tgz",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "oxlint": "^1.81.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0",
+    "wrangler": "^4.151.0"
+  }
+}
