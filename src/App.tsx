@@ -74,19 +74,20 @@ export default function App({ ctx }: { ctx: PluginContext }) {
           </button>
           <button onClick={() => run('fail', () => actions.invoke('fail'))}>Fail</button>
         </div>
-        <form
-          className="row"
-          onSubmit={event => {
-            event.preventDefault()
-            void run(`read-rows ${dataMartId}`, () => actions.invoke('read-rows', { dataMartId }))
-          }}
-        >
+        {/* No <form>: the plugin frame has no allow-forms, so a submit never fires. */}
+        <div className="row">
           <label>
             Data Mart ID
             <input value={dataMartId} onChange={event => setDataMartId(event.target.value)} />
           </label>
-          <button type="submit">Read 10 rows</button>
-        </form>
+          <button
+            onClick={() =>
+              run(`read-rows ${dataMartId}`, () => actions.invoke('read-rows', { dataMartId }))
+            }
+          >
+            Read 10 rows
+          </button>
+        </div>
       </section>
 
       <section>
