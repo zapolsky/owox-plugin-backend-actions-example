@@ -1,4 +1,4 @@
-import type { Check } from './watch.ts'
+import { placesFor, type Check } from './watch.ts'
 
 export type ExportTarget =
   | { action: 'export-check-to-doc'; input: { documentId: string } }
@@ -16,12 +16,12 @@ export function exportTarget(link: string): ExportTarget | null {
 /** A check as a paragraph appended at the end of a Doc; its text starts with the metric and the week. */
 export const docSection = (check: Check) => `\n${check.text}\n`
 
-/** A check as one Sheet row. */
-export const sheetRow = (check: Check) => [
+/** A check as one Sheet row; the value is rounded as in the check's text, two places for a ratio of about 1. */
+export const sheetRow = (check: Check, ratio: boolean) => [
   check.name,
   check.from,
   check.to,
-  check.value,
+  check.value === null ? null : Number(check.value.toFixed(placesFor(ratio, check.value) ?? 0)),
   check.change,
   check.alert ? 'Alert' : 'OK',
   check.reason,

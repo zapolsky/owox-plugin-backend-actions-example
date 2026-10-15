@@ -123,12 +123,14 @@ export default createBackend({
     'export-check-to-sheet': async (input, ctx) => {
       const { checkId, spreadsheetId } = input as { checkId: string; spreadsheetId: string }
       const check = await savedCheck(ctx, checkId)
+      // The watch says whether the value is a ratio, which sets its decimal places.
+      const watch = await ctx.collections<Watch>('watches').get(check.watchId)
       const sheets = new sheets_v4.Sheets(googleOptions(ctx))
       await sheets.spreadsheets.values.append({
         spreadsheetId,
         range: 'A1',
         valueInputOption: 'RAW',
-        requestBody: { values: [sheetRow(check)] },
+        requestBody: { values: [sheetRow(check, watch?.document.denominator != null)] },
       })
       return { spreadsheetId }
     },
