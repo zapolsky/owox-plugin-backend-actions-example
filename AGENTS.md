@@ -1,16 +1,19 @@
 # Agent instructions
 
-This is an example OWOX Data Marts plugin with backend actions: a weekly sales digest. The page
-starts `write-digest` for a Data Mart with `order_date`, `city` and `revenue` columns. The Worker
-reads revenue by day and city through HTTP Data, writes the digest and saves it to the `digests`
-collection, so a digest started before the plugin closed is there when it reopens. One Cloudflare
+This is an example OWOX Data Marts plugin with backend actions: Metric Watch. A member picks a
+Data Mart metric, such as ROAS as the sum of revenue divided by the sum of cost, and the columns
+that explain it, such as channel, campaign and country. The page starts `check-metric`; the Worker
+reads daily sums through HTTP Data, compares the last full week with the eight weeks before,
+splits the change between the values of each column and saves one check per week to the `checks`
+collection. A check started before the plugin closed is there when it reopens. One Cloudflare
 Worker serves the page from `dist/` and runs the action at `/owox`.
 
 - `src/`: the plugin page (Vite and React) on the authoring guide's UI foundation in
-  `styles.css`, with Lucide icons. It starts the action through `ctx.actions` and lists saved
-  digests through `ctx.collections`; `DigestCard.tsx` draws the latest one.
+  `styles.css`, with Lucide icons. It saves watches through `ctx.collections`, starts checks
+  through `ctx.actions` and keeps a running check in the plugin route.
 - `worker/index.ts`: the action, built with `createBackend` from `@owox/plugin-sdk/server`.
-- `worker/digest.ts`: turns revenue rows into the digest text; `worker/digest.test.ts` tests it.
+- `worker/watch.ts`: the usual range, the split of a change and the check text;
+  `worker/watch.test.ts` tests them.
 - `plugin.json`: the manifest. OWOX reads it from the release commit. Within a compatibility line a
   release may add actions but must not remove one.
 - `public/_headers`: sends `Access-Control-Allow-Origin: *`, without which the page's module

@@ -1,21 +1,27 @@
 {
-  "name": "Weekly Sales Digest",
-  "description": "Turns a sales Data Mart into a short weekly digest: revenue against the week before, the leading city, the biggest fall and the best day",
+  "name": "Metric Watch",
+  "description": "Watches a Data Mart metric week by week, flags weeks outside the usual range and explains which channels, campaigns or other values moved it",
   "delivery": {
     "type": "remote",
     "url": "https://owox-plugin-backend-actions-example.e-zapolskiy.workers.dev/"
   },
   "credentials": [],
-  "collections": [{ "name": "digests", "scope": "member" }],
+  "collections": [
+    { "name": "watches", "scope": "member" },
+    { "name": "checks", "scope": "member" }
+  ],
   "backend": {
     "url": "/owox",
     "actions": {
-      "write-digest": {
-        "timeoutSeconds": 120,
+      "check-metric": {
+        "timeoutSeconds": 180,
         "input": {
           "type": "object",
-          "required": ["dataMartId"],
-          "properties": { "dataMartId": { "type": "string", "minLength": 1 } },
+          "required": ["watchId"],
+          "properties": {
+            "watchId": { "type": "string", "minLength": 1, "maxLength": 100 },
+            "weeks": { "type": "integer", "minimum": 1, "maximum": 12 }
+          },
           "additionalProperties": false
         }
       }
