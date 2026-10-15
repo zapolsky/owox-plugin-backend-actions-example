@@ -59,8 +59,11 @@ export default function App({ ctx }: { ctx: PluginContext }) {
   useEffect(() => {
     ctx.owox.dataMarts.list().then(
       items => {
-        setDataMarts(items.map(({ id, title }) => ({ id, title })))
-        setDataMartId(current => current || items[0]?.id || '')
+        const options = items
+          .map(({ id, title }) => ({ id, title }))
+          .sort((a, b) => a.title.localeCompare(b.title))
+        setDataMarts(options)
+        setDataMartId(current => current || options[0]?.id || '')
       },
       (error: unknown) => setStatus({ kind: 'error', message: errorMessage(error) }),
     )

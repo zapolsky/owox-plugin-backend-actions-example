@@ -50,6 +50,11 @@ h2 {
   margin: 8px 0;
 }
 
+.row p {
+  align-self: center;
+  margin: 0;
+}
+
 label {
   display: flex;
   flex-direction: column;
