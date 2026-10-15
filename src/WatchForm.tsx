@@ -145,8 +145,11 @@ export function WatchForm({
                 <select
                   value={numerator}
                   onChange={event => {
+                    // The divisor list leaves out the summed column, so a divisor equal to it shows as Nothing.
+                    const divisor = denominator === event.target.value ? '' : denominator
                     setNumerator(event.target.value)
-                    setName(nameFor(event.target.value, denominator))
+                    setDenominator(divisor)
+                    setName(nameFor(event.target.value, divisor))
                   }}
                 >
                   {columns.numbers.map(column => (
