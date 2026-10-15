@@ -388,32 +388,54 @@ body {
 }
 
 .weeks-chart {
+  position: relative;
   margin: 1rem 0 0;
 }
 
 .weeks-chart svg {
   display: block;
-  width: 100%;
-  height: auto;
+  touch-action: pan-y;
 }
 
-.weeks-chart .axis {
-  position: relative;
-  height: 1.25rem;
-  color: var(--muted-foreground);
-  font-size: 0.75rem;
+.weeks-chart .grid {
+  stroke: var(--border);
+}
+
+.weeks-chart .tick {
+  fill: var(--muted-foreground);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
-.weeks-chart .axis span {
-  position: absolute;
-  transform: translateX(-50%);
-  white-space: nowrap;
+.weeks-chart .tick.current {
+  fill: var(--foreground);
+  font-weight: 600;
 }
 
-.weeks-chart .axis .current {
-  color: var(--foreground);
-  font-weight: 600;
+.weeks-chart .guide {
+  stroke: var(--muted-foreground);
+  stroke-dasharray: 3 3;
+}
+
+.chart-tip {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  gap: 0.125rem;
+  width: max-content;
+  max-width: 16rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--card);
+  box-shadow: 0 4px 16px oklch(0 0 0 / 0.12);
+  font-size: 0.8125rem;
+  pointer-events: none;
+  transform: translate(14px, -50%);
+}
+
+.chart-tip.left {
+  transform: translate(calc(-100% - 14px), -50%);
 }
 
 .weeks-chart .usual {
@@ -686,10 +708,5 @@ input[type='radio'] {
   .driver-bar {
     grid-column: 1 / -1;
     grid-row: 2;
-  }
-
-  /* Nine dates do not fit side by side: keep every other one and the checked week. */
-  .weeks-chart .axis span:nth-child(even):not(.current) {
-    display: none;
   }
 }

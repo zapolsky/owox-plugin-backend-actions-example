@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState, type PointerEvent } from 'react'
 import { CircleCheck, Minus, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
 import {
   formatRange,
@@ -61,47 +62,121 @@ export function Sparkline({ weeks, alert }: { weeks: Week[]; alert: boolean }) {
   )
 }
 
-/** Nine weeks with the usual range shaded; the checked week is the last point. */
+/** The width of an element, followed as it resizes, so the chart draws in real pixels. */
+function useWidth() {
+  const ref = useRef<HTMLElement>(null)
+  const [width, setWidth] = useState(0)
+  useLayoutEffect(() => {
+    const element = ref.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  return [ref, width] as const
+}
+
+/** Steps of 1, 2, 2.5 or 5 times a power of ten, about four of them between `min` and `max`. */
+function ticks(min: number, max: number): number[] {
+  const raw = (max - min) / 4
+  const power = 10 ** Math.floor(Math.log10(raw))
+  const step = [1, 2, 2.5, 5, 10].map(multiple => multiple * power).find(candidate => candidate >= raw)!
+  const values: number[] = []
+  for (let value = Math.ceil(min / step) * step; value <= max; value += step) values.push(value)
+  return values
+}
+
+const CHART_HEIGHT = 240
+
+/** Nine weeks with a value scale and the usual range shaded; hovering a week shows its numbers. */
 function WeeksChart({ check, ratio }: { check: Check; ratio: boolean }) {
+  const [ref, width] = useWidth()
+  const [hover, setHover] = useState<number | null>(null)
   const { weeks, usual } = check
   const values = weeks.flatMap(week => (week.value === null ? [] : [week.value]))
   if (values.length === 0) return null
+
   const bounds = [...values, ...(usual ? [usual.low, usual.high] : [])]
-  const pad = (Math.max(...bounds) - Math.min(...bounds)) * 0.12 || 1
+  const pad = (Math.max(...bounds) - Math.min(...bounds)) * 0.1 || Math.abs(bounds[0]) * 0.1 || 1
   const [min, max] = [Math.min(...bounds) - pad, Math.max(...bounds) + pad]
-  // Points sit 6.25% in from each side, so the HTML labels under them fit at any width.
-  const [left, right, top, bottom] = [40, 600, 8, 152]
-  const x = (i: number) => left + (i / (weeks.length - 1)) * (right - left)
+  const scale = ticks(min, max)
+  const labels = scale.map(tick => formatValue(tick, ratio))
+  const [top, right, bottom, left] = [12, 16, CHART_HEIGHT - 28, 16 + Math.max(...labels.map(label => label.length)) * 7]
+  const last = weeks.length - 1
+  const x = (i: number) => left + (i / last) * (width - left - right)
   const y = (value: number) => bottom - ((value - min) / (max - min)) * (bottom - top)
   const points = weeks.flatMap((week, i) => (week.value === null ? [] : [{ i, value: week.value }]))
-  const last = weeks.length - 1
+  // Nine dates do not fit side by side on a phone: keep every other one, ending on the checked week.
+  const every = width < 520 ? 2 : 1
+
+  const move = (event: PointerEvent<SVGSVGElement>) => {
+    const offset = event.clientX - event.currentTarget.getBoundingClientRect().left
+    setHover(Math.min(last, Math.max(0, Math.round(((offset - left) / (width - left - right)) * last))))
+  }
+  const hovered = hover === null ? null : weeks[hover]
+  const before = hover ? weeks[hover - 1].value : null
+  const change = hovered?.value != null && before ? Math.round((hovered.value / before - 1) * 100) : null
+  const tipY = hovered?.value != null ? y(hovered.value) : top
 
   return (
-    <figure className="weeks-chart">
-      <svg
-        viewBox="0 0 640 160"
-        role="img"
-        aria-label={`${check.name} by week: ${weeks.map(week => `${shortDay(week.from)} ${formatValue(week.value, ratio)}`).join(', ')}`}
-      >
-        {usual && <rect className="usual" x={left} width={right - left} y={y(usual.high)} height={y(usual.low) - y(usual.high)} rx="4" />}
-        <polyline className="line" points={points.map(point => `${x(point.i)},${y(point.value)}`).join(' ')} />
-        {points.map(point => (
-          <circle
-            key={point.i}
-            className={point.i === last ? (check.alert ? 'point alert' : 'point ok') : 'point'}
-            cx={x(point.i)}
-            cy={y(point.value)}
-            r={point.i === last ? 6 : 3.5}
-          />
-        ))}
-      </svg>
-      <div className="axis" aria-hidden>
-        {weeks.map((week, i) => (
-          <span key={week.from} className={i === last ? 'current' : undefined} style={{ left: `${(x(i) / 640) * 100}%` }}>
-            {shortDay(week.from)}
-          </span>
-        ))}
-      </div>
+    <figure className="weeks-chart" ref={ref}>
+      {width > 0 && (
+        <svg
+          width={width}
+          height={CHART_HEIGHT}
+          role="img"
+          aria-label={`${check.name} by week: ${weeks.map(week => `${shortDay(week.from)} ${formatValue(week.value, ratio)}`).join(', ')}`}
+          onPointerMove={move}
+          onPointerLeave={() => setHover(null)}
+        >
+          {scale.map((tick, i) => (
+            <g key={tick}>
+              <line className="grid" x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} />
+              <text className="tick" x={left - 8} y={y(tick)} dy="0.32em" textAnchor="end">
+                {labels[i]}
+              </text>
+            </g>
+          ))}
+          {usual && <rect className="usual" x={left} width={width - left - right} y={y(usual.high)} height={y(usual.low) - y(usual.high)} rx="4" />}
+          {weeks.map((week, i) =>
+            i % every === last % every ? (
+              <text key={week.from} className={i === last ? 'tick current' : 'tick'} x={x(i)} y={CHART_HEIGHT - 6} textAnchor="middle">
+                {shortDay(week.from)}
+              </text>
+            ) : null,
+          )}
+          {hover !== null && <line className="guide" x1={x(hover)} x2={x(hover)} y1={top} y2={bottom} />}
+          <polyline className="line" points={points.map(point => `${x(point.i)},${y(point.value)}`).join(' ')} />
+          {points.map(point => (
+            <circle
+              key={point.i}
+              className={point.i === last ? (check.alert ? 'point alert' : 'point ok') : 'point'}
+              cx={x(point.i)}
+              cy={y(point.value)}
+              r={point.i === last || point.i === hover ? 6 : 3.5}
+            />
+          ))}
+        </svg>
+      )}
+      {hovered && hover !== null && (
+        // Beside the point, towards the middle, so it covers neither the point nor its neighbours' line.
+        <div
+          className={x(hover) > width / 2 ? 'chart-tip left' : 'chart-tip'}
+          style={{ left: x(hover), top: Math.min(bottom - 60, Math.max(top + 60, tipY)) }}
+          aria-hidden
+        >
+          <span className="dm-muted">{formatRange(hovered.from, hovered.to)}</span>
+          <strong>
+            {check.name} {formatValue(hovered.value, ratio)}
+          </strong>
+          {change !== null && (
+            <span>
+              <Change value={change} /> vs the week before
+            </span>
+          )}
+          {hover === last && <span className={check.alert ? 'alert-text' : 'dm-muted'}>{check.reason}</span>}
+        </div>
+      )}
       {usual && (
         <figcaption className="legend dm-muted">
           <i aria-hidden /> Usual range {formatValue(usual.low, ratio)}–{formatValue(usual.high, ratio)}, from the eight weeks before
