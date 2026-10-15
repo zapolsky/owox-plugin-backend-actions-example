@@ -6,8 +6,9 @@ reads revenue by day and city through HTTP Data, writes the digest and saves it 
 collection, so a digest started before the plugin closed is there when it reopens. One Cloudflare
 Worker serves the page from `dist/` and runs the action at `/owox`.
 
-- `src/`: the plugin page (Vite and React). It starts the action through `ctx.actions` and lists
-  saved digests through `ctx.collections`.
+- `src/`: the plugin page (Vite and React) on the authoring guide's UI foundation in
+  `styles.css`, with Lucide icons. It starts the action through `ctx.actions` and lists saved
+  digests through `ctx.collections`; `DigestCard.tsx` draws the latest one.
 - `worker/index.ts`: the action, built with `createBackend` from `@owox/plugin-sdk/server`.
 - `worker/digest.ts`: turns revenue rows into the digest text; `worker/digest.test.ts` tests it.
 - `plugin.json`: the manifest. OWOX reads it from the release commit. Within a compatibility line a

@@ -8,7 +8,7 @@ const root = createRoot(document.getElementById('root')!)
 
 connect().then(
   ctx => {
-    document.documentElement.dataset.theme = ctx.theme
+    document.documentElement.classList.toggle('dark', ctx.theme === 'dark')
     root.render(
       <StrictMode>
         <App ctx={ctx} />

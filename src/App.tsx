@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
+import { ChartColumn, FileText, LoaderCircle, Sparkles } from 'lucide-react'
 import type { PluginContext } from '@owox/plugin-sdk'
+import { amount } from '../worker/digest'
 import type { SavedDigest } from '../worker/index'
+import { Change, DigestCard, WrittenAt } from './DigestCard'
 
 type DataMartOption = { id: string; title: string }
 type SavedEntry = { id: string; createdAt: string; digest: SavedDigest }
@@ -88,77 +91,112 @@ export default function App({ ctx }: { ctx: PluginContext }) {
     }
   }
 
+  const [latest, ...earlier] = history
+
   return (
-    <main>
-      <h1>Weekly sales digest</h1>
-      <p className="hint">
-        Compares the last seven days with the week before. The Data Mart needs{' '}
-        <code>order_date</code>, <code>city</code> and <code>revenue</code> columns.
-      </p>
+    <div className="dm-page">
+      <header className="dm-page-header">
+        <h1 className="dm-page-header-title">Weekly sales digest</h1>
+        <p className="dm-muted subtitle">
+          How did sales go this week? Pick a Data Mart and get revenue, the leading city, the
+          biggest fall and the best day against the week before.
+        </p>
+      </header>
 
-      {/* No <form>: the plugin frame has no allow-forms, so a submit never fires. */}
-      <div className="row">
-        <label>
-          Data Mart
-          <select
-            value={dataMartId}
-            disabled={!dataMarts?.length}
-            onChange={event => setDataMartId(event.target.value)}
-          >
-            {dataMarts === null && <option>Loading…</option>}
-            {dataMarts?.length === 0 && <option>No Data Marts available</option>}
-            {dataMarts?.map(dataMart => (
-              <option key={dataMart.id} value={dataMart.id}>
-                {dataMart.title}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button disabled={!dataMartId || status.kind === 'writing'} onClick={write}>
-          Write digest
-        </button>
-      </div>
-
-      <div aria-live="polite">
-        {status.kind === 'writing' && (
-          <div className="row">
-            <p className="hint">
-              Writing the digest… You can close the plugin: the digest is saved when it is ready.
-            </p>
+      <main className="dm-page-content">
+        <section className="dm-card" aria-labelledby="write-title">
+          <h2 id="write-title" className="card-title">
+            <Sparkles size={16} aria-hidden /> Write a digest
+          </h2>
+          {/* No <form>: the plugin frame has no allow-forms, so a submit never fires. */}
+          <div className="controls">
+            <label className="field">
+              Data Mart
+              <select
+                value={dataMartId}
+                disabled={!dataMarts?.length}
+                onChange={event => setDataMartId(event.target.value)}
+              >
+                {dataMarts === null && <option>Loading…</option>}
+                {dataMarts?.length === 0 && <option>No Data Marts available</option>}
+                {dataMarts?.map(dataMart => (
+                  <option key={dataMart.id} value={dataMart.id}>
+                    {dataMart.title}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
-              className="secondary"
-              onClick={() =>
-                actions
-                  .cancel(status.id)
-                  .catch((error: unknown) =>
-                    setStatus({ kind: 'error', message: errorMessage(error) }),
-                  )
-              }
+              className="button"
+              disabled={!dataMartId || status.kind === 'writing'}
+              onClick={write}
             >
-              Cancel
+              <FileText size={16} aria-hidden /> Write digest
             </button>
           </div>
-        )}
-        {status.kind === 'error' && (
-          <p role="alert" className="error">
-            {status.message}
+          <p className="dm-muted hint">
+            The Data Mart needs <code>order_date</code>, <code>city</code> and <code>revenue</code>{' '}
+            columns.
           </p>
-        )}
-      </div>
 
-      <h2>Digests</h2>
-      {history.length === 0 ? (
-        <p className="hint">No digests yet.</p>
-      ) : (
-        <ol className="digests">
-          {history.map(entry => (
-            <li key={entry.id}>
-              <span className="hint">{new Date(entry.createdAt).toLocaleString()}</span>
-              <p>{entry.digest.text}</p>
-            </li>
-          ))}
-        </ol>
-      )}
-    </main>
+          <div aria-live="polite">
+            {status.kind === 'writing' && (
+              <div className="status">
+                <LoaderCircle className="spin" size={16} aria-hidden />
+                <span>
+                  Writing the digest… You can close the plugin: the digest is saved when it is
+                  ready.
+                </span>
+                <button
+                  className="button secondary"
+                  onClick={() =>
+                    actions
+                      .cancel(status.id)
+                      .catch((error: unknown) =>
+                        setStatus({ kind: 'error', message: errorMessage(error) }),
+                      )
+                  }
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+            {status.kind === 'error' && (
+              <p role="alert" className="alert">
+                {status.message}
+              </p>
+            )}
+          </div>
+        </section>
+
+        {latest ? (
+          <DigestCard digest={latest.digest} createdAt={latest.createdAt} />
+        ) : (
+          <section className="dm-card empty dm-muted">
+            <ChartColumn size={16} aria-hidden /> No digests yet. Write the first one above.
+          </section>
+        )}
+
+        {earlier.length > 0 && (
+          <section className="dm-card" aria-labelledby="earlier-title">
+            <h2 id="earlier-title" className="card-title">
+              Earlier digests
+            </h2>
+            <ol className="history">
+              {earlier.map(({ id, createdAt, digest }) => (
+                <li key={id}>
+                  <span className="dm-muted">
+                    <WrittenAt iso={createdAt} />
+                  </span>
+                  <span>{digest.title}</span>
+                  <span>{typeof digest.revenue === 'number' ? amount(digest.revenue) : ''}</span>
+                  {typeof digest.revenue === 'number' ? <Change value={digest.change} /> : <span />}
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
+      </main>
+    </div>
   )
 }
