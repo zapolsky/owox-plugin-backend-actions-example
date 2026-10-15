@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { ArrowLeft, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
-import { formatRange, formatValue, type Check, type Watch } from '../worker/watch'
+import { formatRange, formatValue, placesFor, type Check, type Watch } from '../worker/watch'
 import { Change, CheckView, StatusBadge } from './CheckView'
 
 const ruleText = (watch: Watch) =>
@@ -39,6 +39,8 @@ export function WatchPage({
   const [confirming, setConfirming] = useState(false)
   const selected = history.find(check => check.asOf === asOf) ?? history[0]
   const alerts = history.filter(check => check.alert).length
+  // One precision for the whole list, so the values line up.
+  const places = placesFor(watch?.denominator != null, selected ? (selected.value ?? selected.previousValue) : null)
 
   return (
     <div className="dm-page">
@@ -115,7 +117,7 @@ export function WatchPage({
                     }}
                   >
                     <span>{formatRange(check.from, check.to)}</span>
-                    <span className="history-value">{formatValue(check.value, watch.denominator !== null)}</span>
+                    <span className="history-value">{formatValue(check.value, places)}</span>
                     <Change value={check.change} />
                     <StatusBadge alert={check.alert} />
                   </button>

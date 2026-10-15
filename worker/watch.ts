@@ -89,17 +89,26 @@ export function formatRange(from: string, to: string): string {
   return `${day(start)} – ${day(end)} ${end.getUTCFullYear()}`
 }
 
-/** `1.96` for a ratio, `54,138` for a sum, `—` when undefined. */
-export function formatValue(value: number | null, ratio: boolean): string {
+/**
+ * Decimal places for a watch's values: null for a sum, and for a ratio near `value` enough for
+ * three significant digits, at least two: `1.96`, `0.104`, `0.0231`.
+ */
+export function placesFor(ratio: boolean, value: number | null): number | null {
+  if (!ratio) return null
+  return value ? Math.min(6, Math.max(2, 2 - Math.floor(Math.log10(Math.abs(value))))) : 2
+}
+
+/** `1.96` for a ratio, `54,138` for a sum (`places` null), `—` when undefined. */
+export function formatValue(value: number | null, places: number | null): string {
   if (value === null) return '—'
-  return ratio
-    ? value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    : Math.round(value).toLocaleString('en-US')
+  return places === null
+    ? Math.round(value).toLocaleString('en-US')
+    : value.toLocaleString('en-US', { minimumFractionDigits: places, maximumFractionDigits: places })
 }
 
 /** `+0.66`, `−1,204`, and `0.00` without a sign when the value rounds to zero. */
-export function signed(value: number, ratio: boolean): string {
-  const text = formatValue(Math.abs(value), ratio)
+export function signed(value: number, places: number | null): string {
+  const text = formatValue(Math.abs(value), places)
   return /[1-9]/.test(text) ? `${value > 0 ? '+' : '−'}${text}` : text
 }
 
@@ -207,6 +216,7 @@ function judge(
   value: number | null,
   previousValue: number | null,
   usual: Check['usual'],
+  places: number | null,
 ): { alert: boolean; reason: string } {
   const ratio = watch.denominator !== null
   if (value === null) {
@@ -217,7 +227,7 @@ function judge(
   }
   if (watch.rule.kind === 'unusual') {
     if (!usual) return { alert: false, reason: 'Needs four earlier weeks with data to know the usual range.' }
-    const range = `${formatValue(usual.low, ratio)}–${formatValue(usual.high, ratio)}`
+    const range = `${formatValue(usual.low, places)}–${formatValue(usual.high, places)}`
     if (value < usual.low) return { alert: true, reason: `Below the usual ${range} of the eight weeks before.` }
     if (value > usual.high) return { alert: true, reason: `Above the usual ${range} of the eight weeks before.` }
     return { alert: false, reason: `Within the usual ${range} of the eight weeks before.` }
@@ -231,24 +241,28 @@ function judge(
   return { alert, reason: alert ? `${moved}, past the ${limit}% the rule allows.` : `${moved}, within ${limit}%.` }
 }
 
-function describe(watch: Watch, check: Omit<Check, 'text'>): string {
-  const ratio = watch.denominator !== null
+/** Below this, a weekly change is everyday noise, and naming what drove it would be guessing. */
+const EXPLAINED_CHANGE = 5
+
+function describe(watch: Watch, check: Omit<Check, 'text'>, places: number | null): string {
   const range = formatRange(check.from, check.to)
   if (check.value === null) return `${watch.name}, ${range}: ${check.reason}`
   const { change } = check
   const moved =
     change === null
-      ? `was ${formatValue(check.value, ratio)}`
+      ? `was ${formatValue(check.value, places)}`
       : change === 0
-        ? `held at ${formatValue(check.value, ratio)}`
-        : `${change < 0 ? 'fell' : 'rose'} ${Math.abs(change)}% to ${formatValue(check.value, ratio)}`
+        ? `held at ${formatValue(check.value, places)}`
+        : `${change < 0 ? 'fell' : 'rose'} ${Math.abs(change)}% to ${formatValue(check.value, places)}`
   const sentences = [
-    `${watch.name}, ${range}: ${moved}${check.previousValue === null ? '' : ` (${formatValue(check.previousValue, ratio)} the week before)`}.`,
+    `${watch.name}, ${range}: ${moved}${check.previousValue === null ? '' : ` (${formatValue(check.previousValue, places)} the week before)`}.`,
   ]
   if (check.alert) sentences.push(check.reason)
 
   const whole = check.value - (check.previousValue ?? 0)
-  if (check.previousValue === null || whole === 0) return sentences.join(' ')
+  if (check.previousValue === null || whole === 0 || Math.abs(change ?? 0) < EXPLAINED_CHANGE) {
+    return sentences.join(' ')
+  }
   // The top value of each dimension, strongest first: a country-wide problem leads with the country.
   const drivers = check.breakdowns
     .flatMap(({ dimension, segments }) => {
@@ -309,6 +323,7 @@ export function checkWeek(
   })
   const [current, previous] = [weeks[BASELINE_WEEKS], weeks[BASELINE_WEEKS - 1]]
   const usual = usualRange(weeks.slice(0, BASELINE_WEEKS).map(week => week.value))
+  const places = placesFor(ratio, current.value ?? previous.value)
   const change =
     current.value !== null && previous.value ? percent(current.value, previous.value) : null
   const check = {
@@ -321,7 +336,7 @@ export function checkWeek(
     previousValue: previous.value,
     change,
     usual,
-    ...judge(watch, current.value, previous.value, usual),
+    ...judge(watch, current.value, previous.value, usual, places),
     weeks,
     breakdowns: watch.dimensions.map(dimension => ({
       dimension,
@@ -329,7 +344,7 @@ export function checkWeek(
     })),
     checkedAt,
   }
-  return { ...check, text: describe(watch, check) }
+  return { ...check, text: describe(watch, check, places) }
 }
 
 /** Explains which of the watched columns a Data Mart lacks. */

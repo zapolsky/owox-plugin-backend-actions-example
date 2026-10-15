@@ -208,7 +208,7 @@ export function WatchForm({
                 ))}
               </div>
             )}
-            <p className="dm-muted hint">Up to three columns. Each one is a query when the watch checks a week.</p>
+            <p className="dm-muted hint">Up to three columns. A check reads them in one query, so many values in each make it slower.</p>
           </fieldset>
 
           <fieldset>

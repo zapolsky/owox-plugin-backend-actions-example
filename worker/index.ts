@@ -11,32 +11,35 @@ import {
 
 const failure = (code: string, message: string) => Object.assign(new Error(message), { code })
 
-/** Daily sums of the watched columns between two days, per value of `dimension` when it is set. */
-async function readSums(
-  ctx: BackendActionContext,
-  watch: Watch,
-  from: string,
-  to: string,
-  dimension?: string,
-): Promise<SumRow[]> {
+/**
+ * Daily sums of the watched columns between two days, per combination of the watch's dimensions,
+ * in one Data Mart run: totals and each dimension's split are summed from the same rows.
+ * ponytail: rows grow with the product of the dimensions' values (days × channels × campaigns × …);
+ * fine for tens of thousands, switch back to one run per dimension for high-cardinality columns.
+ */
+async function readSums(ctx: BackendActionContext, watch: Watch, from: string, to: string) {
   const summed = [watch.numerator, ...(watch.denominator ? [watch.denominator] : [])]
   const data = await ctx.owox.dataMarts.traverseData(watch.dataMartId, {
-    column: [watch.dateColumn, ...(dimension ? [dimension] : []), ...summed],
+    column: [watch.dateColumn, ...watch.dimensions, ...summed],
     aggregation: summed.map(column => ({ column, function: 'SUM' as const })),
     filter: [{ column: watch.dateColumn, operator: 'between', value: { from, to } }],
   })
-  const rows: SumRow[] = []
+  const totals: SumRow[] = []
+  const byDimension: Record<string, SumRow[]> = Object.fromEntries(watch.dimensions.map(dimension => [dimension, []]))
   for await (const chunk of data.rowChunks()) {
     for (const row of chunk) {
-      rows.push({
+      const sums = {
         day: String(row[watch.dateColumn]).slice(0, 10),
-        ...(dimension ? { segment: String(row[dimension] ?? '(empty)') } : {}),
         numerator: Number(row[`${watch.numerator} | SUM`]) || 0,
         denominator: watch.denominator ? Number(row[`${watch.denominator} | SUM`]) || 0 : 0,
-      })
+      }
+      totals.push(sums)
+      for (const dimension of watch.dimensions) {
+        byDimension[dimension].push({ ...sums, segment: String(row[dimension] ?? '(empty)') })
+      }
     }
   }
-  return rows
+  return { totals, byDimension }
 }
 
 /** Names the watched columns a Data Mart lacks, judged by its first row. */
@@ -62,21 +65,16 @@ export default createBackend({
 
       const asOf = new Date().toISOString().slice(0, 10)
       const [from, to] = [firstDay(asOf, weeks), shiftDay(asOf, -1)]
-      let totals: SumRow[]
-      const byDimension: Record<string, SumRow[]> = {}
+      let sums: Awaited<ReturnType<typeof readSums>>
       try {
-        totals = await readSums(ctx, watch, from, to)
-        // One query at a time: each is a Data Mart run, and a cancelled check stops between them.
-        for (const dimension of watch.dimensions) {
-          ctx.signal.throwIfAborted()
-          byDimension[dimension] = await readSums(ctx, watch, from, to, dimension)
-        }
+        sums = await readSums(ctx, watch, from, to)
       } catch (error) {
         if (ctx.signal.aborted) throw error
         const missing = await missingColumns(ctx, watch).catch(() => [])
         if (missing.length === 0) throw error
         throw failure('MISSING_COLUMNS', missingColumnsMessage(dataMart.title, missing))
       }
+      const { totals, byDimension } = sums
       if (totals.length === 0) {
         throw failure('NO_DATA', `${dataMart.title} has no rows between ${from} and ${to}.`)
       }

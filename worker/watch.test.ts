@@ -5,6 +5,7 @@ import {
   checkWeek,
   firstDay,
   shareOf,
+  placesFor,
   shiftDay,
   signed,
   usualRange,
@@ -91,9 +92,22 @@ test('a share is a part of what moved the metric its way, never more than all of
 })
 
 test('a signed value that rounds to zero has no sign', () => {
-  assert.equal(signed(-0.004, true), '0.00')
-  assert.equal(signed(-0.7, true), '−0.70')
-  assert.equal(signed(1204.4, false), '+1,204')
+  assert.equal(signed(-0.004, 2), '0.00')
+  assert.equal(signed(-0.7, 2), '−0.70')
+  assert.equal(signed(1204.4, null), '+1,204')
+})
+
+test('a small ratio keeps three significant digits and a small change names no drivers', () => {
+  assert.equal(placesFor(true, 1.96), 2)
+  assert.equal(placesFor(true, 76.9), 2)
+  assert.equal(placesFor(true, 0.104), 3)
+  assert.equal(placesFor(true, 0.0231), 4)
+  assert.equal(placesFor(false, 0.0231), null)
+  // Orders per session: 3 of 120 a day, then 2.9 of 120 this week, about 3% less.
+  const rate: Watch = { ...roas, name: 'Conversion rate', numerator: 'orders', denominator: 'sessions' }
+  const rows = days((row, ago) => ({ ...row, numerator: ago <= 7 ? 2.9 : 3, denominator: 120 }))
+  const check = checkWeek('w1', rate, asOf, totals(rows), { channel: rows }, '')
+  assert.equal(check.text, 'Conversion rate, 8–14 Oct 2026: fell 3% to 0.0242 (0.0250 the week before).')
 })
 
 test('a sum splits by each value and folds the long tail into Other without losing any of it', () => {
@@ -149,6 +163,16 @@ test('a change no single value explains says so and names the largest part', () 
   )
   const unclear = checkWeek('w1', roas, asOf, totals(spread), { channel: spread }, '')
   assert.match(unclear.text, /No single value explains most of it; the largest is channel "email" \(40%\)\. In "email", cost 0%, revenue −20%\.$/)
+})
+
+test('rows split by more columns than one give the same check', () => {
+  // One Data Mart run returns a row per day and combination of every dimension; each split sums them.
+  const rows = days((row, ago) => (ago <= 7 && row.segment === 'facebook / paid' ? { ...row, denominator: 250 } : row))
+  const split = rows.flatMap(row => ['US', 'PL'].map(() => ({ ...row, numerator: row.numerator / 2, denominator: row.denominator / 2 })))
+  const whole = checkWeek('w1', roas, asOf, totals(rows), { channel: rows }, '')
+  const halves = checkWeek('w1', roas, asOf, totals(split), { channel: split }, '')
+  assert.equal(halves.text, whole.text)
+  assert.deepEqual(halves.weeks, whole.weeks)
 })
 
 test('an ordinary week does not alert', () => {

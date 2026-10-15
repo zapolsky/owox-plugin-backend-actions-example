@@ -3,6 +3,7 @@ import { CircleCheck, Minus, TrendingDown, TrendingUp, TriangleAlert } from 'luc
 import {
   formatRange,
   formatValue,
+  placesFor,
   shareOf,
   signed,
   signedPercent,
@@ -90,7 +91,7 @@ function ticks(min: number, max: number): number[] {
 const CHART_HEIGHT = 240
 
 /** Nine weeks with a value scale and the usual range shaded; hovering a week shows its numbers. */
-function WeeksChart({ check, ratio }: { check: Check; ratio: boolean }) {
+function WeeksChart({ check, places }: { check: Check; places: number | null }) {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState<number | null>(null)
   const { weeks, usual } = check
@@ -101,7 +102,7 @@ function WeeksChart({ check, ratio }: { check: Check; ratio: boolean }) {
   const pad = (Math.max(...bounds) - Math.min(...bounds)) * 0.1 || Math.abs(bounds[0]) * 0.1 || 1
   const [min, max] = [Math.min(...bounds) - pad, Math.max(...bounds) + pad]
   const scale = ticks(min, max)
-  const labels = scale.map(tick => formatValue(tick, ratio))
+  const labels = scale.map(tick => formatValue(tick, places))
   const [top, right, bottom, left] = [12, 16, CHART_HEIGHT - 28, 16 + Math.max(...labels.map(label => label.length)) * 7]
   const last = weeks.length - 1
   const x = (i: number) => left + (i / last) * (width - left - right)
@@ -126,7 +127,7 @@ function WeeksChart({ check, ratio }: { check: Check; ratio: boolean }) {
           width={width}
           height={CHART_HEIGHT}
           role="img"
-          aria-label={`${check.name} by week: ${weeks.map(week => `${shortDay(week.from)} ${formatValue(week.value, ratio)}`).join(', ')}`}
+          aria-label={`${check.name} by week: ${weeks.map(week => `${shortDay(week.from)} ${formatValue(week.value, places)}`).join(', ')}`}
           onPointerMove={move}
           onPointerLeave={() => setHover(null)}
         >
@@ -168,7 +169,7 @@ function WeeksChart({ check, ratio }: { check: Check; ratio: boolean }) {
         >
           <span className="dm-muted">{formatRange(hovered.from, hovered.to)}</span>
           <strong>
-            {check.name} {formatValue(hovered.value, ratio)}
+            {check.name} {formatValue(hovered.value, places)}
           </strong>
           {change !== null && (
             <span>
@@ -180,7 +181,7 @@ function WeeksChart({ check, ratio }: { check: Check; ratio: boolean }) {
       )}
       {usual && (
         <figcaption className="legend dm-muted">
-          <i aria-hidden /> Usual range {formatValue(usual.low, ratio)}–{formatValue(usual.high, ratio)}, from the eight weeks before
+          <i aria-hidden /> Usual range {formatValue(usual.low, places)}–{formatValue(usual.high, places)}, from the eight weeks before
         </figcaption>
       )}
     </figure>
@@ -194,7 +195,7 @@ function Percent({ value }: { value: number | null }) {
 }
 
 /** Which values of one column moved the metric, a column at a time, starting with the strongest driver. */
-function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
+function WhyItChanged({ check, watch, places }: { check: Check; watch: Watch; places: number | null }) {
   const ratio = watch.denominator !== null
   const change = check.value !== null && check.previousValue !== null ? check.value - check.previousValue : 0
   const strongest = (breakdown: Breakdown) =>
@@ -225,8 +226,8 @@ function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
       ) : (
         <>
           <p className="dm-muted hint">
-            Impact is how much each {selected.dimension} moved {check.name} from {formatValue(check.previousValue, ratio)} to{' '}
-            {formatValue(check.value, ratio)}. The impacts add up to {signed(change, ratio)}.
+            Impact is how much each {selected.dimension} moved {check.name} from {formatValue(check.previousValue, places)} to{' '}
+            {formatValue(check.value, places)}. The impacts add up to {signed(change, places)}.
           </p>
           <div className="table-wrap">
             <table className="why-table">
@@ -251,7 +252,7 @@ function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
                 {selected.segments.map(segment => {
                   const part = shareOf(segment, selected.segments, change)
                   const width = `${(Math.abs(segment.contribution) / largest) * 50}%`
-                  const impact = signed(segment.contribution, ratio)
+                  const impact = signed(segment.contribution, places)
                   return (
                     <tr key={segment.name} className={part !== null && part >= 50 ? 'driver' : undefined}>
                       <th scope="row">{segment.name}</th>
@@ -260,8 +261,8 @@ function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
                           <span className="dm-muted">—</span>
                         ) : (
                           <>
-                            <span className="dm-muted">{formatValue(segment.previousValue, ratio)} → </span>
-                            {formatValue(segment.value, ratio)}
+                            <span className="dm-muted">{formatValue(segment.previousValue, places)} → </span>
+                            {formatValue(segment.value, places)}
                           </>
                         )}
                       </td>
@@ -276,7 +277,7 @@ function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
                       <td>
                         <span className="impact">
                           <span className="driver-bar" aria-hidden>
-                            {impact !== formatValue(0, ratio) && (
+                            {impact !== formatValue(0, places) && (
                               <span
                                 className={segment.contribution < 0 ? 'down' : 'up'}
                                 style={segment.contribution < 0 ? { right: '50%', width } : { left: '50%', width }}
@@ -285,7 +286,9 @@ function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
                           </span>
                           <span className="num">
                             {impact}
-                            {part !== null && part > 0 && <span className="dm-muted"> · {part}%</span>}
+                            {part !== null && part > 0 && impact !== formatValue(0, places) && (
+                              <span className="dm-muted"> · {part}%</span>
+                            )}
                           </span>
                         </span>
                       </td>
@@ -303,7 +306,7 @@ function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
 
 /** One checked week: the value, the usual range, and what moved it. */
 export function CheckView({ check, watch }: { check: Check; watch: Watch }) {
-  const ratio = watch.denominator !== null
+  const places = placesFor(watch.denominator !== null, check.value ?? check.previousValue)
   return (
     <section className="dm-card" aria-labelledby="check-title">
       <div className="headline">
@@ -311,17 +314,17 @@ export function CheckView({ check, watch }: { check: Check; watch: Watch }) {
           <div id="check-title" className="kpi-label">
             {check.name} · {formatRange(check.from, check.to)}
           </div>
-          <div className="big-value">{formatValue(check.value, ratio)}</div>
+          <div className="big-value">{formatValue(check.value, places)}</div>
           <div className="kpi-note">
-            <Change value={check.change} /> vs {formatValue(check.previousValue, ratio)} the week before
+            <Change value={check.change} /> vs {formatValue(check.previousValue, places)} the week before
           </div>
         </div>
         <StatusBadge alert={check.alert} />
       </div>
       <p className={check.alert ? 'reason alert-text' : 'reason dm-muted'}>{check.reason}</p>
-      <WeeksChart check={check} ratio={ratio} />
+      <WeeksChart check={check} places={places} />
       <p className="quote">{check.text}</p>
-      <WhyItChanged check={check} watch={watch} />
+      <WhyItChanged check={check} watch={watch} places={places} />
       <p className="dm-muted hint">
         Checked <CheckedAt iso={check.checkedAt} />
       </p>
