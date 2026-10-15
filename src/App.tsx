@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Activity, Plus } from 'lucide-react'
 import type { PluginCollection, PluginCollectionDocument, PluginContext } from '@owox/plugin-sdk'
 import type { Check, Watch } from '../worker/watch'
@@ -8,18 +8,21 @@ import { WatchPage } from './WatchPage'
 
 type Saved<T> = PluginCollectionDocument<T>
 
-// The page keeps no storage, so where the member is, and a running check, live in the plugin's route.
-type Route =
-  | { page: 'list' }
-  | { page: 'new' }
-  | { page: 'watch'; watchId: string; asOf?: string; executionId?: string }
+/**
+ * A check the page started, kept on its watch: a page opened later, from anywhere, follows it until
+ * it ends. The Worker reads the watch and ignores this field.
+ */
+type Run = { executionId: string; weeks: number }
+type StoredWatch = Watch & { run?: Run }
+
+// The page keeps no storage, so where the member is lives in the plugin's route.
+type Route = { page: 'list' } | { page: 'new' } | { page: 'watch'; watchId: string; asOf?: string }
 
 function parseRoute(path: string | undefined): Route {
   const [first, watchId, kind, value] = (path ?? '/').split('/').filter(Boolean).map(decodeURIComponent)
   if (first === 'new') return { page: 'new' }
   if (first !== 'watches' || !watchId) return { page: 'list' }
   if (kind === 'weeks' && value) return { page: 'watch', watchId, asOf: value }
-  if (kind === 'runs' && value) return { page: 'watch', watchId, executionId: value }
   return { page: 'watch', watchId }
 }
 
@@ -27,7 +30,6 @@ function routePath(route: Route): string {
   if (route.page === 'list') return '/'
   if (route.page === 'new') return '/new'
   const base = `/watches/${encodeURIComponent(route.watchId)}`
-  if (route.executionId) return `${base}/runs/${encodeURIComponent(route.executionId)}`
   return route.asOf ? `${base}/weeks/${route.asOf}` : base
 }
 
@@ -54,11 +56,11 @@ function errorMessage(error: unknown): string {
 export default function App({ ctx }: { ctx: PluginContext }) {
   const [route, setRoute] = useState(() => parseRoute(ctx.route))
   const [dataMarts, setDataMarts] = useState<DataMartOption[] | null>(null)
-  const [watches, setWatches] = useState<Saved<Watch>[] | null>(null)
+  const [watches, setWatches] = useState<Saved<StoredWatch>[] | null>(null)
   const [checks, setChecks] = useState<Saved<Check>[]>([])
   const [error, setError] = useState<string | null>(null)
   const actions = ctx.actions
-  const watchStore = ctx.collections<Watch>('watches')
+  const watchStore = ctx.collections<StoredWatch>('watches')
   const checkStore = ctx.collections<Check>('checks')
 
   const go = (next: Route) => {
@@ -85,33 +87,46 @@ export default function App({ ctx }: { ctx: PluginContext }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, when the plugin opens
   }, [])
 
-  // A check started before the plugin closed may still be running: follow it from the route.
-  const executionId = route.page === 'watch' ? route.executionId : undefined
+  // Follows every running check once, including one started before the plugin last closed.
+  const following = useRef(new Set<string>())
   useEffect(() => {
-    if (!executionId || !actions || route.page !== 'watch') return
-    const { watchId } = route
-    actions
-      .wait(executionId)
-      .then(
-        () => null,
-        (failure: unknown) => errorMessage(failure),
-      )
-      .then(message => {
-        go({ page: 'watch', watchId })
-        setError(message)
-        return reload()
-      })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- follows each execution once
-  }, [executionId])
+    if (!actions || !watches) return
+    for (const { id, document } of watches) {
+      const { run } = document
+      if (!run || following.current.has(run.executionId)) continue
+      following.current.add(run.executionId)
+      actions
+        .wait(run.executionId)
+        .then(
+          () => null,
+          (failure: unknown) => errorMessage(failure),
+        )
+        .then(async message => {
+          const latest = await watchStore.get(id)
+          // Deleted meanwhile: nothing left to report.
+          if (!latest) return reload()
+          // Another tab may have started a newer check; that one is not this page's to clear.
+          if (latest.document.run?.executionId === run.executionId) {
+            const { run: _ended, ...watch } = latest.document
+            await watchStore.put(id, watch)
+          }
+          if (message) setError(`${document.name}: ${message}`)
+          return reload()
+        })
+        .catch((failure: unknown) => setError(errorMessage(failure)))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the saved watches only
+  }, [watches])
 
   if (!actions) {
     return <p role="alert">This OWOX Data Marts deployment does not support backend actions.</p>
   }
 
-  const check = async (watchId: string, weeks: number) => {
+  const check = async (watchId: string, watch: StoredWatch, weeks: number) => {
     try {
-      const { id } = await actions.start('check-metric', { watchId, weeks })
-      go({ page: 'watch', watchId, executionId: id })
+      const { id: executionId } = await actions.start('check-metric', { watchId, weeks })
+      await watchStore.put(watchId, { ...watch, run: { executionId, weeks } })
+      await reload()
     } catch (failure) {
       setError(errorMessage(failure))
     }
@@ -122,10 +137,11 @@ export default function App({ ctx }: { ctx: PluginContext }) {
     await reload()
     go({ page: 'watch', watchId: id })
     // The first check also looks back eleven weeks, so the history is not empty.
-    await check(id, 12)
+    await check(id, watch, 12)
   }
 
-  const remove = async (watchId: string) => {
+  const remove = async (watchId: string, run: Run | undefined) => {
+    if (run) await actions.cancel(run.executionId).catch(() => undefined)
     await Promise.all(
       checks.filter(saved => saved.document.watchId === watchId).map(saved => checkStore.delete(saved.id)),
     )
@@ -173,21 +189,24 @@ export default function App({ ctx }: { ctx: PluginContext }) {
         </div>
       )
     }
+    const run = saved?.document.run
     return (
       <WatchPage
         watchId={route.watchId}
         watch={saved?.document ?? null}
         history={historyOf(route.watchId)}
         asOf={route.asOf}
-        running={route.executionId !== undefined}
+        running={run !== undefined}
         error={alert}
         onBack={() => go({ page: 'list' })}
         onSelect={asOf => go({ page: 'watch', watchId: route.watchId, asOf })}
-        onCheck={() => void check(route.watchId, historyOf(route.watchId).length === 0 ? 12 : 1)}
-        onCancel={() => {
-          if (route.executionId) actions.cancel(route.executionId).catch((failure: unknown) => setError(errorMessage(failure)))
+        onCheck={() => {
+          if (saved) void check(saved.id, saved.document, historyOf(saved.id).length === 0 ? 12 : 1)
         }}
-        onDelete={() => void remove(route.watchId).catch((failure: unknown) => setError(errorMessage(failure)))}
+        onCancel={() => {
+          if (run) actions.cancel(run.executionId).catch((failure: unknown) => setError(errorMessage(failure)))
+        }}
+        onDelete={() => void remove(route.watchId, run).catch((failure: unknown) => setError(errorMessage(failure)))}
       />
     )
   }
@@ -225,6 +244,7 @@ export default function App({ ctx }: { ctx: PluginContext }) {
               <WatchCard
                 key={saved.id}
                 watch={saved.document}
+                running={saved.document.run !== undefined}
                 latest={historyOf(saved.id)[0]}
                 onOpen={() => go({ page: 'watch', watchId: saved.id })}
               />
