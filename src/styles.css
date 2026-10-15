@@ -388,10 +388,32 @@ body {
 }
 
 .weeks-chart {
+  margin: 1rem 0 0;
+}
+
+.weeks-chart svg {
   display: block;
   width: 100%;
   height: auto;
-  margin-top: 1rem;
+}
+
+.weeks-chart .axis {
+  position: relative;
+  height: 1.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.weeks-chart .axis span {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.weeks-chart .axis .current {
+  color: var(--foreground);
+  font-weight: 600;
 }
 
 .weeks-chart .usual {
@@ -414,17 +436,6 @@ body {
 .weeks-chart .point.ok,
 .weeks-chart .point.alert {
   stroke: var(--card);
-}
-
-.weeks-chart .axis {
-  fill: var(--muted-foreground);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
-.weeks-chart .axis.current {
-  fill: var(--foreground);
-  font-weight: 600;
 }
 
 .legend {
@@ -675,5 +686,10 @@ input[type='radio'] {
   .driver-bar {
     grid-column: 1 / -1;
     grid-row: 2;
+  }
+
+  /* Nine dates do not fit side by side: keep every other one and the checked week. */
+  .weeks-chart .axis span:nth-child(even):not(.current) {
+    display: none;
   }
 }

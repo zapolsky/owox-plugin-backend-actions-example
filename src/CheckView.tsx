@@ -69,46 +69,45 @@ function WeeksChart({ check, ratio }: { check: Check; ratio: boolean }) {
   const bounds = [...values, ...(usual ? [usual.low, usual.high] : [])]
   const pad = (Math.max(...bounds) - Math.min(...bounds)) * 0.12 || 1
   const [min, max] = [Math.min(...bounds) - pad, Math.max(...bounds) + pad]
-  const [left, right, top, bottom] = [52, 628, 12, 150]
+  // Points sit 6.25% in from each side, so the HTML labels under them fit at any width.
+  const [left, right, top, bottom] = [40, 600, 8, 152]
   const x = (i: number) => left + (i / (weeks.length - 1)) * (right - left)
   const y = (value: number) => bottom - ((value - min) / (max - min)) * (bottom - top)
   const points = weeks.flatMap((week, i) => (week.value === null ? [] : [{ i, value: week.value }]))
   const last = weeks.length - 1
 
   return (
-    <svg
-      className="weeks-chart"
-      viewBox="0 0 640 176"
-      role="img"
-      aria-label={`${check.name} by week: ${weeks.map(week => `${shortDay(week.from)} ${formatValue(week.value, ratio)}`).join(', ')}`}
-    >
+    <figure className="weeks-chart">
+      <svg
+        viewBox="0 0 640 160"
+        role="img"
+        aria-label={`${check.name} by week: ${weeks.map(week => `${shortDay(week.from)} ${formatValue(week.value, ratio)}`).join(', ')}`}
+      >
+        {usual && <rect className="usual" x={left} width={right - left} y={y(usual.high)} height={y(usual.low) - y(usual.high)} rx="4" />}
+        <polyline className="line" points={points.map(point => `${x(point.i)},${y(point.value)}`).join(' ')} />
+        {points.map(point => (
+          <circle
+            key={point.i}
+            className={point.i === last ? (check.alert ? 'point alert' : 'point ok') : 'point'}
+            cx={x(point.i)}
+            cy={y(point.value)}
+            r={point.i === last ? 6 : 3.5}
+          />
+        ))}
+      </svg>
+      <div className="axis" aria-hidden>
+        {weeks.map((week, i) => (
+          <span key={week.from} className={i === last ? 'current' : undefined} style={{ left: `${(x(i) / 640) * 100}%` }}>
+            {shortDay(week.from)}
+          </span>
+        ))}
+      </div>
       {usual && (
-        <>
-          <rect className="usual" x={left} width={right - left} y={y(usual.high)} height={y(usual.low) - y(usual.high)} rx="4" />
-          <text className="axis" x={left - 8} y={y(usual.high) + 4} textAnchor="end">
-            {formatValue(usual.high, ratio)}
-          </text>
-          <text className="axis" x={left - 8} y={y(usual.low) + 4} textAnchor="end">
-            {formatValue(usual.low, ratio)}
-          </text>
-        </>
+        <figcaption className="legend dm-muted">
+          <i aria-hidden /> Usual range {formatValue(usual.low, ratio)}–{formatValue(usual.high, ratio)}, from the eight weeks before
+        </figcaption>
       )}
-      <polyline className="line" points={points.map(point => `${x(point.i)},${y(point.value)}`).join(' ')} />
-      {points.map(point => (
-        <circle
-          key={point.i}
-          className={point.i === last ? (check.alert ? 'point alert' : 'point ok') : 'point'}
-          cx={x(point.i)}
-          cy={y(point.value)}
-          r={point.i === last ? 6 : 3.5}
-        />
-      ))}
-      {weeks.map((week, i) => (
-        <text key={week.from} className={i === last ? 'axis current' : 'axis'} x={x(i)} y="170" textAnchor="middle">
-          {shortDay(week.from)}
-        </text>
-      ))}
-    </svg>
+    </figure>
   )
 }
 
@@ -143,7 +142,10 @@ function Drivers({ breakdown, watch, change }: { breakdown: Breakdown; watch: Wa
                 </span>
                 <span className="driver-value">
                   {signed(segment.contribution, ratio)}
-                  {change !== 0 && <span className="dm-muted"> {Math.round((segment.contribution / change) * 100)}%</span>}
+                  {/* A share only for values that moved the metric the way it went, so the shares read as parts of it. */}
+                  {segment.contribution * change > 0 && (
+                    <span className="dm-muted"> {Math.round((segment.contribution / change) * 100)}%</span>
+                  )}
                 </span>
               </li>
             )
@@ -174,7 +176,6 @@ export function CheckView({ check, watch }: { check: Check; watch: Watch }) {
       </div>
       <p className={check.alert ? 'reason alert-text' : 'reason dm-muted'}>{check.reason}</p>
       <WeeksChart check={check} ratio={ratio} />
-      {check.usual && <p className="legend dm-muted"><i aria-hidden /> Usual range of the eight weeks before</p>}
       <p className="quote">{check.text}</p>
       {check.breakdowns.length > 0 && (
         <>

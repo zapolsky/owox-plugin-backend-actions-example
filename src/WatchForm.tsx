@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { LoaderCircle } from 'lucide-react'
 import type { PluginContext } from '@owox/plugin-sdk'
 import type { Rule, Watch } from '../worker/watch'
@@ -87,8 +87,7 @@ export function WatchForm({
     numerator === denominator ||
     (rule.kind === 'change' && !(rule.percent > 0 && rule.percent <= 1000))
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault()
+  const submit = async () => {
     const dataMart = dataMarts?.find(item => item.id === dataMartId)
     if (invalid || !dataMart) return
     setSaving(true)
@@ -112,7 +111,8 @@ export function WatchForm({
   }
 
   return (
-    <form className="dm-card form" onSubmit={event => void submit(event)}>
+    // Not a <form>: the plugin frame is sandboxed without allow-forms, so a submit event never fires.
+    <div className="dm-card form">
       <label className="field">
         Data Mart
         <select value={dataMartId} onChange={event => void pick(event.target.value)} disabled={!dataMarts || saving}>
@@ -252,13 +252,13 @@ export function WatchForm({
       )}
 
       <div className="actions">
-        <button className="button" type="submit" disabled={invalid || saving}>
+        <button className="button" type="button" onClick={() => void submit()} disabled={invalid || saving}>
           {saving && <LoaderCircle className="spin" size={16} aria-hidden />} Create and check 12 weeks
         </button>
         <button className="button secondary" type="button" onClick={onCancel} disabled={saving}>
           Cancel
         </button>
       </div>
-    </form>
+    </div>
   )
 }

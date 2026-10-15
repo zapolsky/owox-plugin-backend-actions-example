@@ -108,7 +108,11 @@ export function WatchPage({
                   <button
                     className={check === selected ? 'history-row selected' : 'history-row'}
                     aria-current={check === selected ? 'true' : undefined}
-                    onClick={() => onSelect(check.asOf)}
+                    onClick={() => {
+                      onSelect(check.asOf)
+                      // The week opens above the history, out of view from a row near the bottom.
+                      window.scrollTo({ top: 0 })
+                    }}
                   >
                     <span>{formatRange(check.from, check.to)}</span>
                     <span className="history-value">{formatValue(check.value, watch.denominator !== null)}</span>
