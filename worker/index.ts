@@ -1,5 +1,11 @@
 import { createBackend, type BackendActionContext } from '@owox/plugin-sdk/server'
-import { digestWindow, writeDigest, type Digest, type RevenueRow } from './digest'
+import {
+  digestWindow,
+  missingColumnsMessage,
+  writeDigest,
+  type Digest,
+  type RevenueRow,
+} from './digest'
 
 /** The columns a sales Data Mart needs for the digest. */
 const COLUMNS = ['order_date', 'city', 'revenue'] as const
@@ -8,7 +14,12 @@ export type SavedDigest = Digest & { dataMartId: string }
 
 const failure = (code: string, message: string) => Object.assign(new Error(message), { code })
 
-async function readRevenue(ctx: BackendActionContext, dataMartId: string, from: string, to: string) {
+async function readRevenue(
+  ctx: BackendActionContext,
+  dataMartId: string,
+  from: string,
+  to: string,
+) {
   const data = await ctx.owox.dataMarts.traverseData(dataMartId, {
     column: [...COLUMNS],
     aggregation: [{ column: 'revenue', function: 'SUM' }],
@@ -51,11 +62,7 @@ export default createBackend({
       } catch (error) {
         const missing = await missingColumns(ctx, dataMartId).catch(() => [])
         if (missing.length === 0) throw error
-        throw failure(
-          'MISSING_COLUMNS',
-          `${dataMart.title} has no ${missing.map(column => `"${column}"`).join(', ')} column. ` +
-            'A sales digest needs "order_date", "city" and "revenue".',
-        )
+        throw failure('MISSING_COLUMNS', missingColumnsMessage(dataMart.title, missing))
       }
 
       const digest: SavedDigest = { ...writeDigest(dataMart.title, rows, today), dataMartId }

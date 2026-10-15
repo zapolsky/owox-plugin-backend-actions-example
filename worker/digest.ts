@@ -24,11 +24,17 @@ export function digestWindow(today: Date) {
 function formatRange(from: string, to: string): string {
   const [start, end] = [parseDay(from), parseDay(to)]
   const day = (date: Date) => `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]}`
-  if (start.getUTCMonth() === end.getUTCMonth() && start.getUTCFullYear() === end.getUTCFullYear()) {
+  if (
+    start.getUTCMonth() === end.getUTCMonth() &&
+    start.getUTCFullYear() === end.getUTCFullYear()
+  ) {
     return `${start.getUTCDate()}–${day(end)} ${end.getUTCFullYear()}`
   }
   return `${day(start)} – ${day(end)} ${end.getUTCFullYear()}`
 }
+
+const trend = (change: number) =>
+  change === 0 ? 'flat' : `${change > 0 ? 'up' : 'down'} ${Math.abs(change)}%`
 
 /** A whole-percent change, or null when there is nothing to compare with. */
 function percentChange(current: number, previous: number): number | null {
@@ -42,13 +48,26 @@ function sumBy(rows: RevenueRow[], key: (row: RevenueRow) => string): Map<string
 }
 
 const largest = (sums: Map<string, number>) =>
-  [...sums].reduce<[string, number] | null>((best, entry) => (!best || entry[1] > best[1] ? entry : best), null)
+  [...sums].reduce<[string, number] | null>(
+    (best, entry) => (!best || entry[1] > best[1] ? entry : best),
+    null,
+  )
+
+/** Explains which of the digest's columns a Data Mart lacks. */
+export function missingColumnsMessage(title: string, missing: readonly string[]): string {
+  const quoted = missing.map(column => `"${column}"`)
+  const list =
+    quoted.length > 1 ? `${quoted.slice(0, -1).join(', ')} or ${quoted.at(-1)}` : quoted[0]
+  return `${title} has no ${list} column. A sales digest needs "order_date", "city" and "revenue".`
+}
 
 /** Writes the weekly digest from revenue grouped by day and city. */
 export function writeDigest(title: string, rows: RevenueRow[], today: Date): Digest {
   const window = digestWindow(today)
   const current = rows.filter(row => row.day >= window.from && row.day <= window.to)
-  const previous = rows.filter(row => row.day >= window.previousFrom && row.day <= window.previousTo)
+  const previous = rows.filter(
+    row => row.day >= window.previousFrom && row.day <= window.previousTo,
+  )
   const total = current.reduce((sum, row) => sum + row.revenue, 0)
   const previousTotal = previous.reduce((sum, row) => sum + row.revenue, 0)
   const heading = `${title}, ${formatRange(window.from, window.to)}:`
@@ -70,7 +89,7 @@ export function writeDigest(title: string, rows: RevenueRow[], today: Date): Dig
   const comparison =
     change === null
       ? 'with no revenue the week before'
-      : `${change === 0 ? 'flat' : `${change > 0 ? 'up' : 'down'} ${Math.abs(change)}%`} on the week before (${amount(previousTotal)})`
+      : `${trend(change)} on the week before (${amount(previousTotal)})`
   const sentences = [`${heading} revenue ${amount(total)}, ${comparison}.`]
 
   const cities = sumBy(current, row => row.city)
@@ -78,21 +97,24 @@ export function writeDigest(title: string, rows: RevenueRow[], today: Date): Dig
   const [topCity, topRevenue] = largest(cities)!
   const topChange = percentChange(topRevenue, previousCities.get(topCity) ?? 0)
   sentences.push(
-    `${topCity} brought the most: ${amount(topRevenue)}` +
-      (topChange ? `, ${topChange > 0 ? 'up' : 'down'} ${Math.abs(topChange)}%.` : '.'),
+    `${topCity} brought the most: ${amount(topRevenue)}${topChange ? `, ${trend(topChange)}` : ''}.`,
   )
 
   const falls = [...previousCities]
     .filter(([city]) => city !== topCity)
-    .map(([city, before]) => ({ city, now: cities.get(city) ?? 0, change: percentChange(cities.get(city) ?? 0, before)! }))
+    .map(([city, before]) => ({
+      city,
+      now: cities.get(city) ?? 0,
+      change: percentChange(cities.get(city) ?? 0, before)!,
+    }))
     .filter(fall => fall.change < 0)
     .sort((a, b) => a.change - b.change)
-  if (falls[0]) sentences.push(`${falls[0].city} fell ${-falls[0].change}% to ${amount(falls[0].now)}.`)
+  if (falls[0])
+    sentences.push(`${falls[0].city} fell ${-falls[0].change}% to ${amount(falls[0].now)}.`)
 
   const [bestDay, bestRevenue] = largest(sumBy(current, row => row.day))!
   const date = parseDay(bestDay)
-  sentences.push(
-    `Best day: ${WEEKDAYS[date.getUTCDay()]} ${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]}, ${amount(bestRevenue)}.`,
-  )
+  const dayName = `${WEEKDAYS[date.getUTCDay()]} ${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]}`
+  sentences.push(`Best day: ${dayName}, ${amount(bestRevenue)}.`)
   return digest(sentences)
 }

@@ -4,7 +4,10 @@ import type { SavedDigest } from '../worker/index'
 
 type DataMartOption = { id: string; title: string }
 type SavedEntry = { id: string; createdAt: string; digest: SavedDigest }
-type Status = { kind: 'idle' } | { kind: 'writing'; id: string } | { kind: 'error'; message: string }
+type Status =
+  | { kind: 'idle' }
+  | { kind: 'writing'; id: string }
+  | { kind: 'error'; message: string }
 
 // The page keeps no storage, so a started digest's execution id lives in the plugin's route.
 const EXECUTION_ROUTE = '/executions/'
@@ -124,7 +127,9 @@ export default function App({ ctx }: { ctx: PluginContext }) {
               onClick={() =>
                 actions
                   .cancel(status.id)
-                  .catch((error: unknown) => setStatus({ kind: 'error', message: errorMessage(error) }))
+                  .catch((error: unknown) =>
+                    setStatus({ kind: 'error', message: errorMessage(error) }),
+                  )
               }
             >
               Cancel

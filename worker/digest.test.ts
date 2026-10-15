@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { digestWindow, writeDigest, type RevenueRow } from './digest.ts'
+import { digestWindow, missingColumnsMessage, writeDigest, type RevenueRow } from './digest.ts'
 
 const today = new Date('2026-10-15T09:30:00Z')
 
@@ -73,5 +73,16 @@ test('a window across two months names both', () => {
   assert.match(
     writeDigest('Sales', [], new Date('2026-10-03T00:00:00Z')).text,
     /^Sales, 26 Sep – 2 Oct 2026: no orders\.$/,
+  )
+})
+
+test('the missing-columns message lists every missing column', () => {
+  assert.equal(
+    missingColumnsMessage('Visits', ['revenue']),
+    'Visits has no "revenue" column. A sales digest needs "order_date", "city" and "revenue".',
+  )
+  assert.equal(
+    missingColumnsMessage('Visits', ['order_date', 'city', 'revenue']).split('.')[0],
+    'Visits has no "order_date", "city" or "revenue" column',
   )
 })
