@@ -1,4 +1,4 @@
-import { formatRange, type Check } from './watch.ts'
+import type { Check } from './watch.ts'
 
 export type ExportTarget =
   | { action: 'export-check-to-doc'; input: { documentId: string } }
@@ -13,8 +13,8 @@ export function exportTarget(link: string): ExportTarget | null {
     : { action: 'export-check-to-sheet', input: { spreadsheetId: match[2] } }
 }
 
-/** A check as a section appended at the end of a Doc. */
-export const docSection = (check: Check) => `\n${check.name}, ${formatRange(check.from, check.to)}\n${check.text}\n`
+/** A check as a paragraph appended at the end of a Doc; its text starts with the metric and the week. */
+export const docSection = (check: Check) => `\n${check.text}\n`
 
 /** A check as one Sheet row. */
 export const sheetRow = (check: Check) => [

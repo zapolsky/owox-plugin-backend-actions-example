@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ArrowLeft, FileUp, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
 import { formatRange, formatValue, placesFor, type Check, type Watch } from '../worker/watch'
 import { Change, CheckView, StatusBadge } from './CheckView'
@@ -15,8 +15,7 @@ function ExportWeek({ onExport }: { onExport: (link: string) => Promise<string> 
   const [link, setLink] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
+  const submit = () => {
     setBusy(true)
     setResult(null)
     onExport(link)
@@ -27,12 +26,13 @@ function ExportWeek({ onExport }: { onExport: (link: string) => Promise<string> 
       .finally(() => setBusy(false))
   }
   return (
-    <form className="dm-card export" onSubmit={submit}>
+    // Not a form: the plugin frame's sandbox blocks form submission.
+    <section className="dm-card export">
       <label className="field">
         Google Doc or Sheet shared with the service account
         <input type="url" value={link} onChange={event => setLink(event.target.value)} placeholder="https://docs.google.com/…" />
       </label>
-      <button className="button secondary" disabled={busy || !link.trim()}>
+      <button className="button secondary" onClick={submit} disabled={busy || !link.trim()}>
         {busy ? <LoaderCircle className="spin" size={16} aria-hidden /> : <FileUp size={16} aria-hidden />} Export week
       </button>
       {result && (
@@ -40,7 +40,7 @@ function ExportWeek({ onExport }: { onExport: (link: string) => Promise<string> 
           {result.text}
         </p>
       )}
-    </form>
+    </section>
   )
 }
 
