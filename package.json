@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test worker/*.test.ts"
   },
   "dependencies": {
     "@owox/api-client": "file:vendor/owox-api-client-0.38.0.tgz",

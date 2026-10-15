@@ -4,7 +4,6 @@
   --muted: #616e7c;
   --border: #d9dee3;
   --accent: #1e6fd9;
-  --ok: #1f7a3d;
   --error: #c62828;
   --code-bg: #f4f6f8;
   color-scheme: light;
@@ -16,7 +15,6 @@
   --muted: #9aa5b1;
   --border: #323a44;
   --accent: #5c9cf0;
-  --ok: #5fc27e;
   --error: #ef7b7b;
   --code-bg: #1e242b;
   color-scheme: dark;
@@ -59,7 +57,8 @@ label {
   color: var(--muted);
 }
 
-input {
+input,
+select {
   min-width: 280px;
   padding: 6px 8px;
   border: 1px solid var(--border);
@@ -79,6 +78,11 @@ button {
   cursor: pointer;
 }
 
+button.secondary {
+  background: transparent;
+  color: var(--accent);
+}
+
 button:disabled {
   opacity: 0.5;
   cursor: default;
@@ -88,32 +92,27 @@ button:disabled {
   color: var(--muted);
 }
 
-.log {
+.error {
+  color: var(--error);
+}
+
+code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--code-bg);
+}
+
+.digests {
   padding: 0;
   list-style: none;
 }
 
-.log li {
+.digests li {
   padding: 8px 0;
   border-top: 1px solid var(--border);
 }
 
-.state {
-  font-weight: 600;
-}
-
-.ok .state {
-  color: var(--ok);
-}
-
-.error .state {
-  color: var(--error);
-}
-
-pre {
-  overflow-x: auto;
-  margin: 8px 0 0;
-  padding: 8px;
-  border-radius: 6px;
-  background: var(--code-bg);
+.digests p {
+  max-width: 720px;
+  margin: 4px 0 0;
 }

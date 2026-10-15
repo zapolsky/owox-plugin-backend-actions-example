@@ -1,18 +1,17 @@
 {
-  "name": "Backend Actions Example",
-  "description": "Runs example backend actions on a Cloudflare Worker: lists Data Marts, counts for two minutes, fails on purpose and reads Data Mart rows",
+  "name": "Weekly Sales Digest",
+  "description": "Turns a sales Data Mart into a short weekly digest: revenue against the week before, the leading city, the biggest fall and the best day",
   "delivery": {
     "type": "remote",
     "url": "https://owox-plugin-backend-actions-example.e-zapolskiy.workers.dev/"
   },
   "credentials": [],
+  "collections": [{ "name": "digests", "scope": "member" }],
   "backend": {
     "url": "/owox",
     "actions": {
-      "list-data-marts": {},
-      "slow-count": { "timeoutSeconds": 180 },
-      "fail": {},
-      "read-rows": {
+      "write-digest": {
+        "timeoutSeconds": 120,
         "input": {
           "type": "object",
           "required": ["dataMartId"],

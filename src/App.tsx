@@ -1,137 +1,156 @@
-import { useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { PluginContext } from '@owox/plugin-sdk'
+import type { SavedDigest } from '../worker/index'
 
-type Entry = {
-  id: number
-  label: string
-  at: string
-  state: 'running' | 'ok' | 'error'
-  value?: unknown
-}
+type DataMartOption = { id: string; title: string }
+type SavedEntry = { id: string; createdAt: string; digest: SavedDigest }
+type Status = { kind: 'idle' } | { kind: 'writing'; id: string } | { kind: 'error'; message: string }
 
-// The page keeps no storage, so a started execution's id lives in the plugin's route.
+// The page keeps no storage, so a started digest's execution id lives in the plugin's route.
 const EXECUTION_ROUTE = '/executions/'
 
-/** PluginActionError and PluginTransportError are matched by name, not imported as values. */
-function describeError(error: unknown): unknown {
-  if (!(error instanceof Error)) return { error: String(error) }
-  const { code, executionId, errors, payload } = error as Error & Record<string, unknown>
-  return { name: error.name, code, message: error.message, executionId, errors, payload }
+/** PluginActionError and PluginTransportError are matched by code, not imported as values. */
+function errorMessage(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code
+  if (code === 'CANCELLED') return 'The digest was cancelled.'
+  if (code === 'TIMED_OUT') return 'The digest took too long. Try again.'
+  return error instanceof Error ? error.message : String(error)
 }
 
 export default function App({ ctx }: { ctx: PluginContext }) {
-  const [log, setLog] = useState<Entry[]>([])
+  const [dataMarts, setDataMarts] = useState<DataMartOption[] | null>(null)
   const [dataMartId, setDataMartId] = useState('')
-  const [executionId, setExecutionId] = useState(() =>
+  const [history, setHistory] = useState<SavedEntry[]>([])
+  const [status, setStatus] = useState<Status>(() =>
     ctx.route?.startsWith(EXECUTION_ROUTE)
-      ? decodeURIComponent(ctx.route.slice(EXECUTION_ROUTE.length))
-      : '',
+      ? { kind: 'writing', id: decodeURIComponent(ctx.route.slice(EXECUTION_ROUTE.length)) }
+      : { kind: 'idle' },
   )
-  const nextId = useRef(0)
   const actions = ctx.actions
+
+  const loadHistory = () =>
+    ctx
+      .collections<SavedDigest>('digests')
+      .list({ limit: 20 })
+      .then(page =>
+        setHistory(
+          page.items
+            .map(item => ({ id: item.id, createdAt: item.createdAt, digest: item.document }))
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+        ),
+      )
+      .catch((error: unknown) => setStatus({ kind: 'error', message: errorMessage(error) }))
+
+  const follow = (id: string) =>
+    actions
+      ?.wait(id)
+      .then(
+        () => setStatus({ kind: 'idle' }),
+        (error: unknown) => setStatus({ kind: 'error', message: errorMessage(error) }),
+      )
+      .finally(() => {
+        ctx.ui.setRoute('/')
+        return loadHistory()
+      })
+
+  useEffect(() => {
+    ctx.owox.dataMarts.list().then(
+      items => {
+        setDataMarts(items.map(({ id, title }) => ({ id, title })))
+        setDataMartId(current => current || items[0]?.id || '')
+      },
+      (error: unknown) => setStatus({ kind: 'error', message: errorMessage(error) }),
+    )
+    void loadHistory()
+    // A digest started before the plugin closed may still be running.
+    if (status.kind === 'writing') void follow(status.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, when the plugin opens
+  }, [])
 
   if (!actions) {
     return <p role="alert">This OWOX Data Marts deployment does not support backend actions.</p>
   }
 
-  async function run(label: string, task: () => Promise<unknown>) {
-    const id = ++nextId.current
-    const update = (patch: Partial<Entry>) =>
-      setLog(entries => entries.map(entry => (entry.id === id ? { ...entry, ...patch } : entry)))
-    setLog(entries => [
-      { id, label, at: new Date().toLocaleTimeString(), state: 'running' },
-      ...entries,
-    ])
+  const write = async () => {
     try {
-      update({ state: 'ok', value: await task() })
+      const { id } = await actions.start('write-digest', { dataMartId })
+      setStatus({ kind: 'writing', id })
+      ctx.ui.setRoute(EXECUTION_ROUTE + encodeURIComponent(id))
+      void follow(id)
     } catch (error) {
-      update({ state: 'error', value: describeError(error) })
+      setStatus({ kind: 'error', message: errorMessage(error) })
     }
   }
 
-  const startSlowCount = () =>
-    run('start slow-count', async () => {
-      const started = await actions.start('slow-count')
-      setExecutionId(started.id)
-      ctx.ui.setRoute(EXECUTION_ROUTE + encodeURIComponent(started.id))
-      return started
-    })
-
-  const id = executionId.trim()
-
   return (
     <main>
-      <h1>Backend actions example</h1>
+      <h1>Weekly sales digest</h1>
+      <p className="hint">
+        Compares the last seven days with the week before. The Data Mart needs{' '}
+        <code>order_date</code>, <code>city</code> and <code>revenue</code> columns.
+      </p>
 
-      <section>
-        <h2>Invoke and wait for the result</h2>
-        <div className="row">
-          <button onClick={() => run('list-data-marts', () => actions.invoke('list-data-marts'))}>
-            List Data Marts
-          </button>
-          <button onClick={() => run('slow-count', () => actions.invoke('slow-count'))}>
-            Count for 120 seconds
-          </button>
-          <button onClick={() => run('fail', () => actions.invoke('fail'))}>Fail</button>
-        </div>
-        {/* No <form>: the plugin frame has no allow-forms, so a submit never fires. */}
-        <div className="row">
-          <label>
-            Data Mart ID
-            <input value={dataMartId} onChange={event => setDataMartId(event.target.value)} />
-          </label>
-          <button
-            onClick={() =>
-              run(`read-rows ${dataMartId}`, () => actions.invoke('read-rows', { dataMartId }))
-            }
+      {/* No <form>: the plugin frame has no allow-forms, so a submit never fires. */}
+      <div className="row">
+        <label>
+          Data Mart
+          <select
+            value={dataMartId}
+            disabled={!dataMarts?.length}
+            onChange={event => setDataMartId(event.target.value)}
           >
-            Read 10 rows
-          </button>
-        </div>
-      </section>
-
-      <section>
-        <h2>Start now, read later</h2>
-        <p className="hint">
-          A started execution keeps running after you close the plugin. Paste its ID here to read
-          it again.
-        </p>
-        <div className="row">
-          <button onClick={startSlowCount}>Start slow-count</button>
-        </div>
-        <div className="row">
-          <label>
-            Execution ID
-            <input value={executionId} onChange={event => setExecutionId(event.target.value)} />
-          </label>
-          <button disabled={!id} onClick={() => run(`get ${id}`, () => actions.get(id))}>
-            Get
-          </button>
-          <button disabled={!id} onClick={() => run(`wait ${id}`, () => actions.wait(id))}>
-            Wait
-          </button>
-          <button disabled={!id} onClick={() => run(`cancel ${id}`, () => actions.cancel(id))}>
-            Cancel
-          </button>
-        </div>
-      </section>
-
-      <section aria-live="polite">
-        <h2>Results</h2>
-        {log.length === 0 ? (
-          <p className="hint">Nothing has run yet.</p>
-        ) : (
-          <ol className="log">
-            {log.map(entry => (
-              <li key={entry.id} className={entry.state}>
-                <strong>{entry.label}</strong> <span className="hint">{entry.at}</span>{' '}
-                <span className="state">{entry.state}</span>
-                {entry.state !== 'running' && <pre>{JSON.stringify(entry.value, null, 2)}</pre>}
-              </li>
+            {dataMarts === null && <option>Loading…</option>}
+            {dataMarts?.length === 0 && <option>No Data Marts available</option>}
+            {dataMarts?.map(dataMart => (
+              <option key={dataMart.id} value={dataMart.id}>
+                {dataMart.title}
+              </option>
             ))}
-          </ol>
+          </select>
+        </label>
+        <button disabled={!dataMartId || status.kind === 'writing'} onClick={write}>
+          Write digest
+        </button>
+      </div>
+
+      <div aria-live="polite">
+        {status.kind === 'writing' && (
+          <div className="row">
+            <p className="hint">
+              Writing the digest… You can close the plugin: the digest is saved when it is ready.
+            </p>
+            <button
+              className="secondary"
+              onClick={() =>
+                actions
+                  .cancel(status.id)
+                  .catch((error: unknown) => setStatus({ kind: 'error', message: errorMessage(error) }))
+              }
+            >
+              Cancel
+            </button>
+          </div>
         )}
-      </section>
+        {status.kind === 'error' && (
+          <p role="alert" className="error">
+            {status.message}
+          </p>
+        )}
+      </div>
+
+      <h2>Digests</h2>
+      {history.length === 0 ? (
+        <p className="hint">No digests yet.</p>
+      ) : (
+        <ol className="digests">
+          {history.map(entry => (
+            <li key={entry.id}>
+              <span className="hint">{new Date(entry.createdAt).toLocaleString()}</span>
+              <p>{entry.digest.text}</p>
+            </li>
+          ))}
+        </ol>
+      )}
     </main>
   )
 }
