@@ -86,6 +86,13 @@ body {
 }
 
 /* Metric Watch */
+/* The header and the content share one centered column, so New watch lines up with the cards. */
+.dm-page-header,
+.dm-page-content {
+  max-width: 1200px;
+  margin-inline: auto;
+}
+
 /* Grid items do not shrink below their content, so a wide table would widen the page. */
 .dm-page-content > * {
   min-width: 0;
