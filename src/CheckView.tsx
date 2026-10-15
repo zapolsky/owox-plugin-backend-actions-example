@@ -3,6 +3,7 @@ import { CircleCheck, Minus, TrendingDown, TrendingUp, TriangleAlert } from 'luc
 import {
   formatRange,
   formatValue,
+  shareOf,
   signed,
   signedPercent,
   type Breakdown,
@@ -186,46 +187,115 @@ function WeeksChart({ check, ratio }: { check: Check; ratio: boolean }) {
   )
 }
 
-/** Each value's part of the change as a bar left (down) or right (up) of zero. */
-function Drivers({ breakdown, watch, change }: { breakdown: Breakdown; watch: Watch; change: number }) {
+/** A column's percent change, bold when it moved by a quarter or more. */
+function Percent({ value }: { value: number | null }) {
+  if (value === null) return <span className="dm-muted">—</span>
+  return <span className={Math.abs(value) >= 25 ? 'big-change' : undefined}>{signedPercent(value)}</span>
+}
+
+/** Which values of one column moved the metric, a column at a time, starting with the strongest driver. */
+function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
   const ratio = watch.denominator !== null
-  const largest = Math.max(...breakdown.segments.map(segment => Math.abs(segment.contribution)), Number.EPSILON)
+  const change = check.value !== null && check.previousValue !== null ? check.value - check.previousValue : 0
+  const strongest = (breakdown: Breakdown) =>
+    Math.max(0, ...breakdown.segments.map(segment => shareOf(segment, breakdown.segments, change) ?? 0))
+  const [dimension, setDimension] = useState(() => [...check.breakdowns].sort((a, b) => strongest(b) - strongest(a))[0]?.dimension)
+  const selected = check.breakdowns.find(breakdown => breakdown.dimension === dimension) ?? check.breakdowns[0]
+  if (!selected) return null
+  const largest = Math.max(...selected.segments.map(segment => Math.abs(segment.contribution)), Number.EPSILON)
+
   return (
-    <section className="drivers" aria-labelledby={`by-${breakdown.dimension}`}>
-      <h3 id={`by-${breakdown.dimension}`}>By {breakdown.dimension}</h3>
-      {breakdown.segments.length === 0 ? (
+    <section aria-labelledby="why-title">
+      <div className="why-head">
+        <h2 id="why-title" className="section-title">
+          Why it changed
+        </h2>
+        {check.breakdowns.length > 1 && (
+          <div className="segmented" role="group" aria-label="Explain by">
+            {check.breakdowns.map(breakdown => (
+              <button key={breakdown.dimension} aria-pressed={breakdown === selected} onClick={() => setDimension(breakdown.dimension)}>
+                {breakdown.dimension}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {selected.segments.length === 0 ? (
         <p className="dm-muted hint">Nothing to compare with the week before.</p>
       ) : (
-        <ul>
-          {breakdown.segments.map(segment => {
-            const width = `${(Math.abs(segment.contribution) / largest) * 50}%`
-            const sides = [
-              segment.denominatorChange === null ? null : `${watch.denominator} ${signedPercent(segment.denominatorChange)}`,
-              segment.numeratorChange === null ? null : `${watch.numerator} ${signedPercent(segment.numeratorChange)}`,
-            ].filter(Boolean)
-            return (
-              <li key={segment.name}>
-                <span className="driver-name">
-                  {segment.name}
-                  {sides.length > 0 && <span className="dm-muted">{sides.join(' · ')}</span>}
-                </span>
-                <span className="driver-bar" aria-hidden>
-                  <span
-                    className={segment.contribution < 0 ? 'down' : 'up'}
-                    style={segment.contribution < 0 ? { right: '50%', width } : { left: '50%', width }}
-                  />
-                </span>
-                <span className="driver-value">
-                  {signed(segment.contribution, ratio)}
-                  {/* A share only for values that moved the metric the way it went, so the shares read as parts of it. */}
-                  {segment.contribution * change > 0 && (
-                    <span className="dm-muted"> {Math.round((segment.contribution / change) * 100)}%</span>
+        <>
+          <p className="dm-muted hint">
+            Impact is how much each {selected.dimension} moved {check.name} from {formatValue(check.previousValue, ratio)} to{' '}
+            {formatValue(check.value, ratio)}. The impacts add up to {signed(change, ratio)}.
+          </p>
+          <div className="table-wrap">
+            <table className="why-table">
+              <thead>
+                <tr>
+                  <th scope="col">{selected.dimension}</th>
+                  <th scope="col" className="num">
+                    {check.name}, before → now
+                  </th>
+                  {ratio && (
+                    <th scope="col" className="num">
+                      {watch.denominator}
+                    </th>
                   )}
-                </span>
-              </li>
-            )
-          })}
-        </ul>
+                  <th scope="col" className="num">
+                    {ratio ? watch.numerator : 'Change'}
+                  </th>
+                  <th scope="col">Impact on {check.name}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selected.segments.map(segment => {
+                  const part = shareOf(segment, selected.segments, change)
+                  const width = `${(Math.abs(segment.contribution) / largest) * 50}%`
+                  const impact = signed(segment.contribution, ratio)
+                  return (
+                    <tr key={segment.name} className={part !== null && part >= 50 ? 'driver' : undefined}>
+                      <th scope="row">{segment.name}</th>
+                      <td className="num">
+                        {segment.value === null && segment.previousValue === null ? (
+                          <span className="dm-muted">—</span>
+                        ) : (
+                          <>
+                            <span className="dm-muted">{formatValue(segment.previousValue, ratio)} → </span>
+                            {formatValue(segment.value, ratio)}
+                          </>
+                        )}
+                      </td>
+                      {ratio && (
+                        <td className="num">
+                          <Percent value={segment.denominatorChange} />
+                        </td>
+                      )}
+                      <td className="num">
+                        <Percent value={segment.numeratorChange} />
+                      </td>
+                      <td>
+                        <span className="impact">
+                          <span className="driver-bar" aria-hidden>
+                            {impact !== formatValue(0, ratio) && (
+                              <span
+                                className={segment.contribution < 0 ? 'down' : 'up'}
+                                style={segment.contribution < 0 ? { right: '50%', width } : { left: '50%', width }}
+                              />
+                            )}
+                          </span>
+                          <span className="num">
+                            {impact}
+                            {part !== null && part > 0 && <span className="dm-muted"> · {part}%</span>}
+                          </span>
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </section>
   )
@@ -234,7 +304,6 @@ function Drivers({ breakdown, watch, change }: { breakdown: Breakdown; watch: Wa
 /** One checked week: the value, the usual range, and what moved it. */
 export function CheckView({ check, watch }: { check: Check; watch: Watch }) {
   const ratio = watch.denominator !== null
-  const change = check.value !== null && check.previousValue !== null ? check.value - check.previousValue : 0
   return (
     <section className="dm-card" aria-labelledby="check-title">
       <div className="headline">
@@ -252,16 +321,7 @@ export function CheckView({ check, watch }: { check: Check; watch: Watch }) {
       <p className={check.alert ? 'reason alert-text' : 'reason dm-muted'}>{check.reason}</p>
       <WeeksChart check={check} ratio={ratio} />
       <p className="quote">{check.text}</p>
-      {check.breakdowns.length > 0 && (
-        <>
-          <h2 className="section-title">Why it changed</h2>
-          <div className="drivers-grid">
-            {check.breakdowns.map(breakdown => (
-              <Drivers key={breakdown.dimension} breakdown={breakdown} watch={watch} change={change} />
-            ))}
-          </div>
-        </>
-      )}
+      <WhyItChanged check={check} watch={watch} />
       <p className="dm-muted hint">
         Checked <CheckedAt iso={check.checkedAt} />
       </p>

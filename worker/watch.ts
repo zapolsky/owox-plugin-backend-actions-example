@@ -97,8 +97,11 @@ export function formatValue(value: number | null, ratio: boolean): string {
     : Math.round(value).toLocaleString('en-US')
 }
 
-export const signed = (value: number, ratio: boolean) =>
-  `${value > 0 ? '+' : value < 0 ? '−' : ''}${formatValue(Math.abs(value), ratio)}`
+/** `+0.66`, `−1,204`, and `0.00` without a sign when the value rounds to zero. */
+export function signed(value: number, ratio: boolean): string {
+  const text = formatValue(Math.abs(value), ratio)
+  return /[1-9]/.test(text) ? `${value > 0 ? '+' : '−'}${text}` : text
+}
 
 type Sums = { numerator: number; denominator: number }
 
@@ -150,9 +153,10 @@ export function usualRange(values: (number | null)[]): { low: number; high: numb
 
 /**
  * Splits the change of the metric between the values of one dimension. A sum splits by each
- * value's own change. A ratio R = ΣN / ΣD splits exactly as
- * (N₁ − R₀·D₁) / ΣD₁ − (N₀ − R₀·D₀) / ΣD₀ per value, so a value that grows its cost without
- * revenue gets the drop, and the parts add up to R₁ − R₀.
+ * value's own change. A ratio R = ΣN / ΣD splits exactly as (ΔN − R₀·ΔD) / ΣD₁ per value: what the
+ * value added beyond what its added cost earns at last week's ratio. The parts add up to R₁ − R₀,
+ * a value that grows its cost without revenue gets the drop, and a value that did not change gets
+ * nothing.
  */
 export function breakdown(
   rows: SumRow[],
@@ -170,8 +174,7 @@ export function breakdown(
   const segments = [...new Set([...now.keys(), ...before.keys()])].map(name => {
     const [n, b] = [now.get(name) ?? zero, before.get(name) ?? zero]
     const contribution = ratio
-      ? (n.numerator - ratioBefore! * n.denominator) / totalNow.denominator -
-        (b.numerator - ratioBefore! * b.denominator) / totalBefore.denominator
+      ? (n.numerator - b.numerator - ratioBefore! * (n.denominator - b.denominator)) / totalNow.denominator
       : n.numerator - b.numerator
     return {
       name,
@@ -207,7 +210,10 @@ function judge(
 ): { alert: boolean; reason: string } {
   const ratio = watch.denominator !== null
   if (value === null) {
-    return { alert: false, reason: `No ${watch.denominator} this week, so ${watch.name} is undefined.` }
+    return {
+      alert: false,
+      reason: ratio ? `No ${watch.denominator} this week, so ${watch.name} is undefined.` : 'No data this week.',
+    }
   }
   if (watch.rule.kind === 'unusual') {
     if (!usual) return { alert: false, reason: 'Needs four earlier weeks with data to know the usual range.' }
@@ -247,7 +253,7 @@ function describe(watch: Watch, check: Omit<Check, 'text'>): string {
   const drivers = check.breakdowns
     .flatMap(({ dimension, segments }) => {
       const top = segments.find(segment => segment.contribution * whole > 0 && !segment.name.startsWith('Other ('))
-      return top ? [{ dimension, top, share: Math.round((top.contribution / whole) * 100) }] : []
+      return top ? [{ dimension, top, share: shareOf(top, segments, whole) ?? 0 }] : []
     })
     .sort((a, b) => b.share - a.share)
   if (drivers.length === 0) return sentences.join(' ')
@@ -268,6 +274,21 @@ function describe(watch: Watch, check: Omit<Check, 'text'>): string {
   return sentences.join(' ')
 }
 
+/**
+ * A value's percent of everything that moved the metric the way `whole` went, so the values that
+ * pulled it one way add up to 100% even when others won some of it back. Null for a value that
+ * pulled the other way or not at all.
+ */
+export function shareOf(
+  segment: { contribution: number },
+  segments: readonly { contribution: number }[],
+  whole: number,
+): number | null {
+  if (segment.contribution * whole <= 0) return null
+  const pull = segments.reduce((sum, other) => (other.contribution * whole > 0 ? sum + other.contribution : sum), 0)
+  return Math.round((segment.contribution / pull) * 100)
+}
+
 export const signedPercent = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value)}%`
 
 /** Checks the week before `asOf` from daily sums: in total, and per value of each dimension. */
@@ -282,7 +303,9 @@ export function checkWeek(
   const ratio = watch.denominator !== null
   const weeks = Array.from({ length: BASELINE_WEEKS + 1 }, (_, i) => {
     const window = weekAt(asOf, BASELINE_WEEKS - i)
-    return { ...window, value: metric(total(sumBySegment(totals, window.from, window.to).values()), ratio) }
+    const sums = sumBySegment(totals, window.from, window.to)
+    // A week without rows has no value: zero would make an empty history look like a usual range.
+    return { ...window, value: sums.size > 0 ? metric(total(sums.values()), ratio) : null }
   })
   const [current, previous] = [weeks[BASELINE_WEEKS], weeks[BASELINE_WEEKS - 1]]
   const usual = usualRange(weeks.slice(0, BASELINE_WEEKS).map(week => week.value))

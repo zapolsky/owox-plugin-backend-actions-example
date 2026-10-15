@@ -4,7 +4,9 @@ import {
   breakdown,
   checkWeek,
   firstDay,
+  shareOf,
   shiftDay,
+  signed,
   usualRange,
   weekAt,
   type SumRow,
@@ -59,6 +61,39 @@ test('the parts of a ratio change add up to the change and blame the value that 
   assert.ok(segments[0].contribution < -0.9)
   assert.equal(segments[0].denominatorChange, 100)
   assert.equal(segments[0].numeratorChange, 0)
+})
+
+test('a value that did not change gets no part of a ratio change', () => {
+  // email earns 15 per unit of cost and stays the same while facebook doubles its cost.
+  const rows = days(
+    (row, ago) =>
+      row.segment === 'email'
+        ? { ...row, numerator: 1500 }
+        : ago <= 7 ? { ...row, denominator: 200 } : row,
+    ['facebook / paid', 'email'],
+  )
+  const segments = breakdown(rows, weekAt(asOf, 0), weekAt(asOf, 1), true)
+  const email = segments.find(segment => segment.name === 'email')
+  assert.equal(email?.contribution, 0)
+  assert.ok(Math.abs(segments.reduce((all, segment) => all + segment.contribution, 0) - (1800 / 300 - 9)) < 1e-12)
+})
+
+test('a share is a part of what moved the metric its way, never more than all of it', () => {
+  // facebook drops ROAS by 1.2 and google wins 0.2 back: facebook is all of the drop, not 120% of it.
+  const segments = [
+    { name: 'facebook', contribution: -1.2 },
+    { name: 'google', contribution: 0.2 },
+    { name: 'email', contribution: -0.0 },
+  ]
+  assert.equal(shareOf(segments[0], segments, -1), 100)
+  assert.equal(shareOf(segments[1], segments, -1), null)
+  assert.equal(shareOf(segments[2], segments, -1), null)
+})
+
+test('a signed value that rounds to zero has no sign', () => {
+  assert.equal(signed(-0.004, true), '0.00')
+  assert.equal(signed(-0.7, true), '−0.70')
+  assert.equal(signed(1204.4, false), '+1,204')
 })
 
 test('a sum splits by each value and folds the long tail into Other without losing any of it', () => {
@@ -133,6 +168,20 @@ test('a change rule alerts only in its direction', () => {
   const either = checkWeek('w1', { ...rising, rule: { ...rising.rule, direction: 'any' } }, asOf, totals(rows), {}, '')
   assert.equal(either.alert, true)
   assert.equal(either.reason, 'Rose 33%, past the 15% the rule allows.')
+})
+
+test('weeks without rows have no value instead of zero and set no usual range', () => {
+  const visits: Watch = { ...roas, name: 'visits', numerator: 'visits', denominator: null }
+  // Data starts three weeks back: the five weeks before are empty, not zero.
+  const rows = days().filter(row => row.day >= weekAt(asOf, 2).from)
+  const check = checkWeek('w1', visits, asOf, totals(rows), { channel: rows }, '')
+  assert.deepEqual(check.weeks.map(week => week.value), [null, null, null, null, null, null, 4200, 4200, 4200])
+  assert.equal(check.usual, null)
+  assert.equal(check.alert, false)
+  assert.equal(check.reason, 'Needs four earlier weeks with data to know the usual range.')
+  const empty = checkWeek('w1', visits, shiftDay(asOf, 21), totals(rows), {}, '')
+  assert.equal(empty.value, null)
+  assert.equal(empty.reason, 'No data this week.')
 })
 
 test('a week with no cost has no ROAS and says so instead of dividing by zero', () => {
