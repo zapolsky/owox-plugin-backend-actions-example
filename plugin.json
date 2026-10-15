@@ -5,7 +5,13 @@
     "type": "remote",
     "url": "https://owox-plugin-backend-actions-example.e-zapolskiy.workers.dev/"
   },
-  "credentials": [],
+  "credentials": [
+    {
+      "id": "google-service-account",
+      "optional": true,
+      "scopes": ["https://www.googleapis.com/auth/documents", "https://www.googleapis.com/auth/spreadsheets"]
+    }
+  ],
   "collections": [
     { "name": "watches", "scope": "member" },
     { "name": "checks", "scope": "member" }
@@ -21,6 +27,30 @@
           "properties": {
             "watchId": { "type": "string", "minLength": 1, "maxLength": 100 },
             "weeks": { "type": "integer", "minimum": 1, "maximum": 12 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "export-check-to-doc": {
+        "timeoutSeconds": 30,
+        "input": {
+          "type": "object",
+          "required": ["checkId", "documentId"],
+          "properties": {
+            "checkId": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "documentId": { "type": "string", "minLength": 1, "maxLength": 200 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "export-check-to-sheet": {
+        "timeoutSeconds": 30,
+        "input": {
+          "type": "object",
+          "required": ["checkId", "spreadsheetId"],
+          "properties": {
+            "checkId": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "spreadsheetId": { "type": "string", "minLength": 1, "maxLength": 200 }
           },
           "additionalProperties": false
         }

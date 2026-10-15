@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react'
-import { ArrowLeft, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
+import { useState, type FormEvent, type ReactNode } from 'react'
+import { ArrowLeft, FileUp, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
 import { formatRange, formatValue, placesFor, type Check, type Watch } from '../worker/watch'
 import { Change, CheckView, StatusBadge } from './CheckView'
 
@@ -9,6 +9,40 @@ const ruleText = (watch: Watch) =>
     : `Alerts when it changes by more than ${watch.rule.percent}% ${
         watch.rule.direction === 'any' ? 'either way' : watch.rule.direction
       } against the week before.`
+
+/** Sends the selected week to a Google Doc or Sheet; the link decides which. */
+function ExportWeek({ onExport }: { onExport: (link: string) => Promise<string> }) {
+  const [link, setLink] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setResult(null)
+    onExport(link)
+      .then(
+        text => setResult({ ok: true, text }),
+        (failure: unknown) => setResult({ ok: false, text: failure instanceof Error ? failure.message : String(failure) }),
+      )
+      .finally(() => setBusy(false))
+  }
+  return (
+    <form className="dm-card export" onSubmit={submit}>
+      <label className="field">
+        Google Doc or Sheet shared with the service account
+        <input type="url" value={link} onChange={event => setLink(event.target.value)} placeholder="https://docs.google.com/…" />
+      </label>
+      <button className="button secondary" disabled={busy || !link.trim()}>
+        {busy ? <LoaderCircle className="spin" size={16} aria-hidden /> : <FileUp size={16} aria-hidden />} Export week
+      </button>
+      {result && (
+        <p role={result.ok ? 'status' : 'alert'} className={result.ok ? 'dm-muted' : 'alert'}>
+          {result.text}
+        </p>
+      )}
+    </form>
+  )
+}
 
 /** One watch: the selected week (the latest by default) and the history of checked weeks. */
 export function WatchPage({
@@ -23,6 +57,7 @@ export function WatchPage({
   onCheck,
   onCancel,
   onDelete,
+  onExport,
 }: {
   watchId: string
   watch: Watch | null
@@ -35,6 +70,7 @@ export function WatchPage({
   onCheck: () => void
   onCancel: () => void
   onDelete: () => void
+  onExport: (checkId: string, link: string) => Promise<string>
 }) {
   const [confirming, setConfirming] = useState(false)
   const selected = history.find(check => check.asOf === asOf) ?? history[0]
@@ -92,7 +128,10 @@ export function WatchPage({
           </p>
         )}
         {watch && selected ? (
-          <CheckView key={`${watchId}~${selected.asOf}`} check={selected} watch={watch} />
+          <>
+            <CheckView key={`${watchId}~${selected.asOf}`} check={selected} watch={watch} />
+            <ExportWeek onExport={link => onExport(`${watchId}~${selected.asOf}`, link)} />
+          </>
         ) : (
           !running && <section className="dm-card empty dm-muted">No checked weeks yet. Check now to see the last one.</section>
         )}

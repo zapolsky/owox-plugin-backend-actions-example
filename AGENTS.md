@@ -5,13 +5,17 @@ Data Mart metric, such as ROAS as the sum of revenue divided by the sum of cost,
 that explain it, such as channel, campaign and country. The page starts `check-metric`; the Worker
 reads daily sums through HTTP Data, compares the last full week with the eight weeks before,
 splits the change between the values of each column and saves one check per week to the `checks`
-collection. A check started before the plugin closed is there when it reopens. One Cloudflare
-Worker serves the page from `dist/` and runs the action at `/owox`.
+collection. A check started before the plugin closed is there when it reopens. With an optional
+Google Service Account Credential, `export-check-to-doc` and `export-check-to-sheet` append a
+check to a Google Doc or Sheet; OWOX adds the access token, so the key never reaches the Worker.
+One Cloudflare Worker serves the page from `dist/` and runs the actions at `/owox`.
 
 - `src/`: the plugin page (Vite and React) on the authoring guide's UI foundation in
   `styles.css`, with Lucide icons. It saves watches through `ctx.collections`, starts checks
   through `ctx.actions` and keeps a running check in the plugin route.
-- `worker/index.ts`: the action, built with `createBackend` from `@owox/plugin-sdk/server`.
+- `worker/index.ts`: the actions, built with `createBackend` from `@owox/plugin-sdk/server`.
+- `worker/google.ts`: the export target of a Doc or Sheet link and what a check adds there;
+  `worker/google.test.ts` tests the link.
 - `worker/watch.ts`: the usual range, the split of a change and the check text;
   `worker/watch.test.ts` tests them.
 - `plugin.json`: the manifest. OWOX reads it from the release commit. Within a compatibility line a

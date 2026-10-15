@@ -1,4 +1,7 @@
-import { createBackend, type BackendActionContext } from '@owox/plugin-sdk/server'
+import { docs_v1 } from '@googleapis/docs'
+import { sheets_v4 } from '@googleapis/sheets'
+import { createBackend, exactCredential, type BackendActionContext } from '@owox/plugin-sdk/server'
+import { docSection, sheetRow } from './google'
 import {
   checkWeek,
   firstDay,
@@ -52,6 +55,21 @@ async function missingColumns(ctx: BackendActionContext, watch: Watch) {
   return []
 }
 
+/** Google's API clients send through OWOX, which adds the access token; the key never reaches the Worker. */
+function googleOptions(ctx: BackendActionContext) {
+  const google = exactCredential(ctx.credentials, 'google-service-account')
+  if (!google) {
+    throw failure('GOOGLE_NOT_CONFIGURED', 'Choose a Google Service Account Credential in the Metric Watch settings to export checks.')
+  }
+  return { fetchImplementation: google.asFetch(), signal: ctx.signal }
+}
+
+async function savedCheck(ctx: BackendActionContext, checkId: string) {
+  const saved = await ctx.collections<Check>('checks').get(checkId)
+  if (!saved) throw failure('CHECK_NOT_FOUND', 'This check no longer exists.')
+  return saved.document
+}
+
 export default createBackend({
   actions: {
     /** Checks the last full week, and with `weeks` the weeks before it too, into the `checks` history. */
@@ -87,6 +105,32 @@ export default createBackend({
         await history.put(`${watchId}~${check.asOf}`, check)
       }
       return { checked: weeks }
+    },
+
+    /** Appends a check at the end of a Google Doc shared with the service account. */
+    'export-check-to-doc': async (input, ctx) => {
+      const { checkId, documentId } = input as { checkId: string; documentId: string }
+      const check = await savedCheck(ctx, checkId)
+      const docs = new docs_v1.Docs(googleOptions(ctx))
+      await docs.documents.batchUpdate({
+        documentId,
+        requestBody: { requests: [{ insertText: { endOfSegmentLocation: {}, text: docSection(check) } }] },
+      })
+      return { documentId }
+    },
+
+    /** Appends a check as one row of a Google Sheet shared with the service account. */
+    'export-check-to-sheet': async (input, ctx) => {
+      const { checkId, spreadsheetId } = input as { checkId: string; spreadsheetId: string }
+      const check = await savedCheck(ctx, checkId)
+      const sheets = new sheets_v4.Sheets(googleOptions(ctx))
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: 'A1',
+        valueInputOption: 'RAW',
+        requestBody: { values: [sheetRow(check)] },
+      })
+      return { spreadsheetId }
     },
   },
 })

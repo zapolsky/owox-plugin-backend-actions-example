@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, Plus } from 'lucide-react'
 import type { PluginCollection, PluginCollectionDocument, PluginContext } from '@owox/plugin-sdk'
+import { exportTarget } from '../worker/google'
 import type { Check, Watch } from '../worker/watch'
 import { WatchCard } from './WatchCard'
 import { WatchForm, type DataMartOption } from './WatchForm'
@@ -132,6 +133,13 @@ export default function App({ ctx }: { ctx: PluginContext }) {
     }
   }
 
+  const exportCheck = async (checkId: string, link: string) => {
+    const target = exportTarget(link)
+    if (!target) throw new Error('Paste the link of a Google Doc or Sheet.')
+    await actions.invoke(target.action, { checkId, ...target.input })
+    return target.action === 'export-check-to-doc' ? 'Added at the end of the Doc.' : 'Added as a row of the Sheet.'
+  }
+
   const create = async (id: string, watch: Watch) => {
     await watchStore.put(id, watch)
     await reload()
@@ -207,6 +215,7 @@ export default function App({ ctx }: { ctx: PluginContext }) {
           if (run) actions.cancel(run.executionId).catch((failure: unknown) => setError(errorMessage(failure)))
         }}
         onDelete={() => void remove(route.watchId, run).catch((failure: unknown) => setError(errorMessage(failure)))}
+        onExport={exportCheck}
       />
     )
   }
