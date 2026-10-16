@@ -3,8 +3,8 @@ export type Rule =
   | { kind: 'unusual' }
   | { kind: 'change'; percent: number; direction: 'down' | 'up' | 'any' }
 
-/** How a watch's values read: `54,138`, `$54,138`, `1.96%` or `1.99×`. */
-export type Format = 'number' | 'money' | 'percent' | 'times'
+/** How a watch's values read: `54,138`, `1.96%` or `1.99×`. */
+export type Format = 'number' | 'percent' | 'times'
 
 /** How unusual a week must be to count: fewer alerts at low, more at high. */
 export type Sensitivity = 'low' | 'medium' | 'high'
@@ -27,8 +27,6 @@ export type Watch = {
   rule: Rule
   /** `number` when unset, as for watches saved before formats. */
   format?: Format
-  /** An ISO 4217 code for the `money` format; USD when unset. */
-  currency?: string
   /** Whether a rise is good news, as for revenue (the default), or bad, as for cost. */
   rise?: 'good' | 'bad'
   /** `medium` when unset. */
@@ -132,30 +130,19 @@ export function signed(value: number, places: number | null): string {
 /** A watch's value as it reads: `54,138`, `$54,138`, `$76.99`, `1.96%`, `10.1%` or `1.99×`. */
 export function formatMetric(
   value: number | null,
-  watch: Pick<Watch, 'format' | 'currency'>,
+  watch: Pick<Watch, 'format'>,
   places: number | null,
 ): string {
   if (value === null) return '—'
   if (watch.format === 'percent') return `${formatValue(value * 100, Math.abs(value) >= 0.1 ? 1 : 2)}%`
   if (watch.format === 'times') return `${formatValue(value, 2)}×`
-  if (watch.format === 'money') {
-    return value.toLocaleString('en-US', {
-      style: 'currency',
-      currency: watch.currency ?? 'USD',
-      minimumFractionDigits: places ?? 0,
-      maximumFractionDigits: places ?? 0,
-    })
-  }
   return formatValue(value, places)
 }
 
-/** A part of a change in the watch's terms: `−0.71`, `−$2,972`, `−0.50 pp`; no sign when it rounds to zero. */
-export function formatDelta(value: number, watch: Pick<Watch, 'format' | 'currency'>, places: number | null): string {
+/** A part of a change in the watch's terms: `−0.71`, `−2,972`, `−0.50 pp`; no sign when it rounds to zero. */
+export function formatDelta(value: number, watch: Pick<Watch, 'format'>, places: number | null): string {
   if (watch.format === 'percent') return `${signed(value * 100, 2)} pp`
-  if (watch.format === 'times') return signed(value, 2)
-  if (watch.format !== 'money') return signed(value, places)
-  const text = formatMetric(Math.abs(value), watch, places)
-  return /[1-9]/.test(text) ? `${value > 0 ? '+' : '−'}${text}` : text
+  return signed(value, watch.format === 'times' ? 2 : places)
 }
 
 type Sums = { numerator: number; denominator: number }

@@ -229,15 +229,14 @@ test('a week with no cost has no ROAS and says so instead of dividing by zero', 
 
 test('a value reads in the format its watch chose', () => {
   assert.equal(formatMetric(54138.4, {}, null), '54,138')
-  assert.equal(formatMetric(54138.4, { format: 'money' }, null), '$54,138')
-  assert.equal(formatMetric(76.994, { format: 'money', currency: 'EUR' }, 2), '€76.99')
+  assert.equal(formatMetric(76.994, { format: 'number' }, 2), '76.99')
   assert.equal(formatMetric(0.0196, { format: 'percent' }, 4), '1.96%')
   assert.equal(formatMetric(0.101, { format: 'percent' }, 3), '10.1%')
   assert.equal(formatMetric(1.9895, { format: 'times' }, 2), '1.99×')
   assert.equal(formatMetric(null, { format: 'times' }, 2), '—')
   assert.equal(formatDelta(-0.005, { format: 'percent' }, 4), '−0.50 pp')
-  assert.equal(formatDelta(-2972.4, { format: 'money' }, null), '−$2,972')
-  assert.equal(formatDelta(0.0004, { format: 'money' }, null), '$0')
+  assert.equal(formatDelta(-2972.4, {}, null), '−2,972')
+  assert.equal(formatDelta(0.0004, {}, null), '0')
   assert.equal(formatDelta(-0.709, { format: 'times' }, 2), '−0.71')
 })
 
@@ -322,7 +321,7 @@ test('an explanation leads with the most specific value that explains the change
 })
 
 test('a sum names the change of its own column, and a small change is not explained', () => {
-  const mrr: Watch = { ...roas, name: 'New MRR', numerator: 'mrr', denominator: null, format: 'money' }
+  const mrr: Watch = { ...roas, name: 'New MRR', numerator: 'mrr', denominator: null }
   const drop = {
     ...({} as Check),
     value: 64560,
@@ -332,7 +331,7 @@ test('a sum names the change of its own column, and a small change is not explai
   } satisfies Check
   assert.deepEqual(explain(drop, mrr), {
     headline: 'In plan Team, mrr fell 85%.',
-    points: ['plan Team: New MRR $44,700 → $6,700 (−85%).'],
+    points: ['plan Team: New MRR 44,700 → 6,700 (−85%).'],
   })
   assert.equal(explain({ ...drop, change: -3 }, mrr), null)
 })

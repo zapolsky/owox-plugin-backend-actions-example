@@ -8,10 +8,8 @@ export type DataMartOption = { id: string; title: string }
 type Columns = { dates: string[]; numbers: string[]; texts: string[] }
 
 const MAX_DIMENSIONS = 3
-const CURRENCIES = ['USD', 'EUR', 'GBP', 'PLN', 'UAH', 'CAD']
 const FORMATS: [Format, string][] = [
   ['number', 'Number'],
-  ['money', 'Money'],
   ['percent', 'Percent'],
   ['times', 'Times'],
 ]
@@ -36,13 +34,11 @@ function classify(row: Record<string, unknown>): Columns {
 const nameFor = (numerator: string, denominator: string) =>
   !denominator ? numerator : /revenue/i.test(numerator) && /cost|spend/i.test(denominator) ? 'ROAS' : `${numerator} / ${denominator}`
 
-/** How a new metric probably reads: ROAS as 1.99×, a conversion as 1.96%, revenue and CPA in money. */
+/** How a new metric probably reads: ROAS as 1.99×, a conversion as 1.96%, anything else as a number. */
 function formatFor(numerator: string, denominator: string): Format {
-  const money = /revenue|cost|spend|sales|mrr|amount|price|value/i
-  if (!denominator) return money.test(numerator) ? 'money' : 'number'
   if (/revenue|value|sales/i.test(numerator) && /cost|spend/i.test(denominator)) return 'times'
   if (/session|visit|user|click|impression|signup|lead|view/i.test(denominator)) return 'percent'
-  return money.test(numerator) ? 'money' : 'number'
+  return 'number'
 }
 
 /** More cost is bad news; most other metrics are better higher. */
@@ -102,8 +98,8 @@ export function WatchForm({
   const [numerator, setNumerator] = useState(saved?.numerator ?? '')
   const [denominator, setDenominator] = useState(saved?.denominator ?? '')
   const [name, setName] = useState(saved?.name ?? '')
-  const [format, setFormat] = useState<Format>(saved?.format ?? 'number')
-  const [currency, setCurrency] = useState(saved?.currency ?? 'USD')
+  // A format this page no longer offers, such as money, reads as a number.
+  const [format, setFormat] = useState<Format>(FORMATS.find(([value]) => value === saved?.format)?.[0] ?? 'number')
   const [rise, setRise] = useState<'good' | 'bad'>(saved?.rise ?? 'good')
   const [dimensions, setDimensions] = useState<string[]>(saved?.dimensions ?? [])
   const [rule, setRule] = useState<Rule>(saved?.rule ?? { kind: 'unusual' })
@@ -180,7 +176,6 @@ export function WatchForm({
     dimensions,
     rule,
     format,
-    ...(format === 'money' ? { currency } : {}),
     rise,
     sensitivity,
   }
@@ -310,16 +305,6 @@ export function WatchForm({
                     ))}
                   </div>
                 </div>
-                {format === 'money' && (
-                  <label className="field">
-                    Currency
-                    <select value={currency} onChange={event => setCurrency(event.target.value)}>
-                      {withSaved(CURRENCIES, currency).map(code => (
-                        <option key={code}>{code}</option>
-                      ))}
-                    </select>
-                  </label>
-                )}
                 <div className="field">
                   <span id="rise-is">A rise is</span>
                   <div className="segmented wide" role="group" aria-labelledby="rise-is">
@@ -431,7 +416,7 @@ export function WatchForm({
           <>
             <p className="summary-lead">
               <strong>{draft.name || 'The metric'}</strong> = {ratio ? `${numerator} ÷ ${denominator}` : `sum of ${numerator}`} from{' '}
-              <strong>{dataMartTitle}</strong>, shown as {formatMetric(example, { format, currency }, ratio ? 2 : null)}.
+              <strong>{dataMartTitle}</strong>, shown as {formatMetric(example, { format }, ratio ? 2 : null)}.
             </p>
             <p className="flush">{ruleSentence}</p>
             <p className="flush">
