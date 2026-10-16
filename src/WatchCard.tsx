@@ -1,6 +1,14 @@
 import { ChevronRight, LoaderCircle } from 'lucide-react'
-import { formatRange, formatValue, placesFor, type Check, type Watch } from '../worker/watch'
-import { Change, Sparkline, StatusBadge } from './CheckView'
+import { driverChanges, drivers, formatMetric, leadDriver, placesOf, standing, verdict, type Check, type Watch } from '../worker/watch'
+import { Change, Sparkline, VerdictBadge } from './CheckView'
+
+/** The card's last line: what moved an unusual week, or where an ordinary one stands. */
+function footnote(watch: Watch, latest: Check): { why: string; detail: string } | string {
+  const tone = verdict(latest, watch).tone
+  const lead = tone === 'bad' || tone === 'good' ? leadDriver(drivers(latest)) : null
+  if (lead && lead.share >= 50) return { why: lead.top.name, detail: driverChanges(watch, lead.top) }
+  return standing(latest, watch)
+}
 
 /** A watch in the list, with its latest checked week. */
 export function WatchCard({
@@ -14,7 +22,8 @@ export function WatchCard({
   latest: Check | undefined
   onOpen: () => void
 }) {
-  const ratio = watch.denominator !== null
+  const result = latest ? verdict(latest, watch) : null
+  const note = latest ? footnote(watch, latest) : null
   return (
     <button className="dm-card watch-card" onClick={onOpen}>
       <span className="watch-card-head">
@@ -26,25 +35,37 @@ export function WatchCard({
           <span className="badge">
             <LoaderCircle className="spin" size={13} aria-hidden /> Checking
           </span>
-        ) : latest ? (
-          <StatusBadge alert={latest.alert} />
+        ) : result ? (
+          <VerdictBadge verdict={result} />
         ) : (
           <span className="badge">Not checked</span>
         )}
       </span>
-      {latest && (
+      {latest && result && (
         <span className="watch-card-body">
           <span>
-            <span className="big-value small">{formatValue(latest.value, placesFor(ratio, latest.value ?? latest.previousValue))}</span>
+            <span className="big-value small">{formatMetric(latest.value, watch, placesOf(latest, watch))}</span>
             <span className="kpi-note">
-              <Change value={latest.change} /> {formatRange(latest.from, latest.to)}
+              <Change value={latest.change} tone={result.tone} /> vs {formatMetric(latest.previousValue, watch, placesOf(latest, watch))}
             </span>
           </span>
-          <Sparkline weeks={latest.weeks} alert={latest.alert} />
+          <Sparkline weeks={latest.weeks} usual={watch.rule.kind === 'unusual' ? latest.usual : null} tone={result.tone} />
         </span>
       )}
       <span className="watch-card-foot dm-muted">
-        {watch.rule.kind === 'unusual' ? 'Alerts on unusual weeks' : `Alerts on a ${watch.rule.percent}% change`}
+        <span>
+          {running ? (
+            'The result is saved here when the check ends.'
+          ) : note === null ? (
+            'Not checked yet.'
+          ) : typeof note === 'string' ? (
+            note
+          ) : (
+            <>
+              Why: <strong>{note.why}</strong> · {note.detail}
+            </>
+          )}
+        </span>
         <ChevronRight size={16} aria-hidden />
       </span>
     </button>

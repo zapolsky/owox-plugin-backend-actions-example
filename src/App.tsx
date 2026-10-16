@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Activity, Plus } from 'lucide-react'
+import { Activity, ArrowLeft, Plus } from 'lucide-react'
 import type { PluginCollection, PluginCollectionDocument, PluginContext } from '@owox/plugin-sdk'
 import { exportTarget } from '../worker/google'
-import type { Check, Watch } from '../worker/watch'
+import { formatRange, verdict, type Check, type Watch } from '../worker/watch'
+import { CheckedAt } from './CheckView'
 import { WatchCard } from './WatchCard'
 import { WatchForm, type DataMartOption } from './WatchForm'
 import { WatchPage } from './WatchPage'
@@ -17,12 +18,17 @@ type Run = { executionId: string; weeks: number }
 type StoredWatch = Watch & { run?: Run }
 
 // The page keeps no storage, so where the member is lives in the plugin's route.
-type Route = { page: 'list' } | { page: 'new' } | { page: 'watch'; watchId: string; asOf?: string }
+type Route =
+  | { page: 'list' }
+  | { page: 'new' }
+  | { page: 'watch'; watchId: string; asOf?: string }
+  | { page: 'edit'; watchId: string }
 
 function parseRoute(path: string | undefined): Route {
   const [first, watchId, kind, value] = (path ?? '/').split('/').filter(Boolean).map(decodeURIComponent)
   if (first === 'new') return { page: 'new' }
   if (first !== 'watches' || !watchId) return { page: 'list' }
+  if (kind === 'edit') return { page: 'edit', watchId }
   if (kind === 'weeks' && value) return { page: 'watch', watchId, asOf: value }
   return { page: 'watch', watchId }
 }
@@ -31,8 +37,11 @@ function routePath(route: Route): string {
   if (route.page === 'list') return '/'
   if (route.page === 'new') return '/new'
   const base = `/watches/${encodeURIComponent(route.watchId)}`
+  if (route.page === 'edit') return `${base}/edit`
   return route.asOf ? `${base}/weeks/${route.asOf}` : base
 }
+
+type Filter = 'all' | 'attention' | 'usual'
 
 /** Every document of a collection, a page of 100 at a time. */
 async function listAll<T>(collection: PluginCollection<T>): Promise<Saved<T>[]> {
@@ -60,6 +69,7 @@ export default function App({ ctx }: { ctx: PluginContext }) {
   const [watches, setWatches] = useState<Saved<StoredWatch>[] | null>(null)
   const [checks, setChecks] = useState<Saved<Check>[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [filter, setFilter] = useState<Filter>('all')
   const actions = ctx.actions
   const watchStore = ctx.collections<StoredWatch>('watches')
   const checkStore = ctx.collections<Check>('checks')
@@ -140,12 +150,20 @@ export default function App({ ctx }: { ctx: PluginContext }) {
     return target.action === 'export-check-to-doc' ? 'Added at the end of the Doc.' : 'Added as a row of the Sheet.'
   }
 
-  const create = async (id: string, watch: Watch) => {
-    await watchStore.put(id, watch)
+  /**
+   * Saves a new or edited watch. A change that makes its checked weeks wrong replaces them with 12
+   * freshly checked weeks; a new watch looks back eleven weeks too, so its history is not empty.
+   */
+  const save = async (id: string, watch: Watch, recheck: boolean) => {
+    const run = watches?.find(saved => saved.id === id)?.document.run
+    if (recheck) {
+      if (run) await actions.cancel(run.executionId).catch(() => undefined)
+      await Promise.all(checks.filter(saved => saved.document.watchId === id).map(saved => checkStore.delete(saved.id)))
+    }
+    await watchStore.put(id, !recheck && run ? { ...watch, run } : watch)
     await reload()
     go({ page: 'watch', watchId: id })
-    // The first check also looks back eleven weeks, so the history is not empty.
-    await check(id, watch, 12)
+    if (recheck) await check(id, watch, 12)
   }
 
   const remove = async (watchId: string, run: Run | undefined) => {
@@ -170,16 +188,36 @@ export default function App({ ctx }: { ctx: PluginContext }) {
     </p>
   )
 
-  if (route.page === 'new') {
+  if (route.page === 'new' || route.page === 'edit') {
+    const editing = route.page === 'edit' ? watches?.find(item => item.id === route.watchId) : undefined
+    const back: Route = route.page === 'edit' ? { page: 'watch', watchId: route.watchId } : { page: 'list' }
+    if (route.page === 'edit' && !editing) {
+      return (
+        <div className="dm-page">
+          <main className="dm-page-content top">
+            <p className="dm-muted">{watches ? 'This watch no longer exists.' : 'Loading the watch…'}</p>
+            <button className="button secondary" onClick={() => go({ page: 'list' })}>All watches</button>
+          </main>
+        </div>
+      )
+    }
     return (
       <div className="dm-page">
         <header className="dm-page-header">
-          <h1 className="dm-page-header-title">New watch</h1>
-          <p className="dm-muted subtitle">Pick a Data Mart and the metric to watch. The first check also looks back eleven weeks.</p>
+          <button className="link" onClick={() => go(back)}>
+            <ArrowLeft size={14} aria-hidden /> {editing ? editing.document.name : 'All watches'}
+          </button>
+          <h1 className="dm-page-header-title">{editing ? `Edit ${editing.document.name}` : 'New watch'}</h1>
         </header>
         <main className="dm-page-content">
           {alert}
-          <WatchForm ctx={ctx} dataMarts={dataMarts} onCancel={() => go({ page: 'list' })} onCreate={create} />
+          <WatchForm
+            ctx={ctx}
+            dataMarts={dataMarts}
+            initial={editing && { id: editing.id, watch: editing.document }}
+            onCancel={() => go(back)}
+            onSave={save}
+          />
         </main>
       </div>
     )
@@ -214,11 +252,29 @@ export default function App({ ctx }: { ctx: PluginContext }) {
         onCancel={() => {
           if (run) actions.cancel(run.executionId).catch((failure: unknown) => setError(errorMessage(failure)))
         }}
+        onEdit={() => go({ page: 'edit', watchId: route.watchId })}
         onDelete={() => void remove(route.watchId, run).catch((failure: unknown) => setError(errorMessage(failure)))}
         onExport={exportCheck}
       />
     )
   }
+
+  // Each watch with its latest week and how that week reads: alerts first, the largest change first.
+  const listed = (watches ?? []).map(saved => {
+    const latest = historyOf(saved.id)[0]
+    return { saved, latest, tone: latest ? verdict(latest, saved.document).tone : 'none' }
+  })
+  const attention = listed
+    .filter(item => item.tone === 'bad')
+    .sort((a, b) => Math.abs(b.latest?.change ?? 0) - Math.abs(a.latest?.change ?? 0))
+  const usual = listed.filter(item => item.tone !== 'bad')
+  const newest = listed
+    .flatMap(item => (item.latest ? [item.latest] : []))
+    .sort((a, b) => b.asOf.localeCompare(a.asOf) || b.checkedAt.localeCompare(a.checkedAt))[0]
+  const groups = [
+    { key: 'attention', title: 'Needs attention', items: attention },
+    { key: 'usual', title: 'As usual', items: usual },
+  ].filter(group => group.items.length > 0 && (filter === 'all' || filter === group.key))
 
   return (
     <div className="dm-page">
@@ -248,17 +304,56 @@ export default function App({ ctx }: { ctx: PluginContext }) {
             </button>
           </section>
         ) : (
-          <div className="watch-grid">
-            {watches.map(saved => (
-              <WatchCard
-                key={saved.id}
-                watch={saved.document}
-                running={saved.document.run !== undefined}
-                latest={historyOf(saved.id)[0]}
-                onOpen={() => go({ page: 'watch', watchId: saved.id })}
-              />
+          <>
+            <div className="week-bar">
+              <p className="flush">
+                {newest && <strong>Week of {formatRange(newest.from, newest.to)}</strong>}
+                <span className={attention.length > 0 ? 'attention' : 'dm-muted'}>
+                  {attention.length} {attention.length === 1 ? 'needs' : 'need'} attention
+                </span>
+                <span className="dm-muted">
+                  {usual.length} as usual
+                  {newest && (
+                    <>
+                      {' '}
+                      · checked <CheckedAt iso={newest.checkedAt} />
+                    </>
+                  )}
+                </span>
+              </p>
+              <div className="segmented" role="group" aria-label="Show">
+                {(
+                  [
+                    ['all', `All ${listed.length}`],
+                    ['attention', `Needs attention ${attention.length}`],
+                    ['usual', `As usual ${usual.length}`],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {groups.map(group => (
+              <section key={group.key} className="watch-group" aria-labelledby={`group-${group.key}`}>
+                <h2 id={`group-${group.key}`} className="group-title">
+                  {group.title} · {group.items.length}
+                </h2>
+                <div className="watch-grid">
+                  {group.items.map(({ saved, latest }) => (
+                    <WatchCard
+                      key={saved.id}
+                      watch={saved.document}
+                      running={saved.document.run !== undefined}
+                      latest={latest}
+                      onOpen={() => go({ page: 'watch', watchId: saved.id })}
+                    />
+                  ))}
+                </div>
+              </section>
             ))}
-          </div>
+          </>
         )}
       </main>
     </div>

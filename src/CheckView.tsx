@@ -1,14 +1,19 @@
-import { useLayoutEffect, useRef, useState, type PointerEvent } from 'react'
-import { CircleCheck, Minus, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
+import { useLayoutEffect, useRef, useState, type MouseEvent } from 'react'
+import { CircleCheck, Lightbulb, Minus, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react'
 import {
+  drivers,
+  explain,
+  formatDelta,
+  formatMetric,
   formatRange,
-  formatValue,
-  placesFor,
+  leadDriver,
+  placesOf,
   shareOf,
-  signed,
   signedPercent,
-  type Breakdown,
+  standing,
+  verdict,
   type Check,
+  type Verdict,
   type Watch,
   type Week,
 } from '../worker/watch'
@@ -24,42 +29,42 @@ export function CheckedAt({ iso }: { iso: string }) {
   return new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
-export function Change({ value }: { value: number | null }) {
+/** A percent change, coloured by what it means for the watch rather than by its sign. */
+export function Change({ value, tone }: { value: number | null; tone: Verdict['tone'] }) {
   if (value === null) return <span className="change">—</span>
-  const [Icon, kind] = value > 0 ? [TrendingUp, 'up'] : value < 0 ? [TrendingDown, 'down'] : [Minus, 'flat']
+  const Icon = value > 0 ? TrendingUp : value < 0 ? TrendingDown : Minus
   return (
-    <span className={`change ${kind}`}>
+    <span className={`change ${tone}`}>
       <Icon size={14} aria-hidden />
       {signedPercent(value)}
     </span>
   )
 }
 
-export function StatusBadge({ alert }: { alert: boolean }) {
-  return alert ? (
-    <span className="badge alert">
-      <TriangleAlert size={13} aria-hidden /> Alert
-    </span>
-  ) : (
-    <span className="badge ok">
-      <CircleCheck size={13} aria-hidden /> OK
+export function VerdictBadge({ verdict }: { verdict: Verdict }) {
+  const Icon = verdict.tone === 'bad' ? TriangleAlert : verdict.tone === 'good' ? TrendingUp : CircleCheck
+  return (
+    <span className={`badge ${verdict.tone}`}>
+      {verdict.tone !== 'none' && <Icon size={13} aria-hidden />}
+      {verdict.label}
     </span>
   )
 }
 
-/** Weekly values as a small line; the last dot is the checked week. */
-export function Sparkline({ weeks, alert }: { weeks: Week[]; alert: boolean }) {
+/** Weekly values as a small line over the usual range; the last dot is the checked week. */
+export function Sparkline({ weeks, usual, tone }: { weeks: Week[]; usual: Check['usual']; tone: Verdict['tone'] }) {
   const known = weeks.flatMap((week, i) => (week.value === null ? [] : [{ i, value: week.value }]))
   if (known.length < 2) return null
-  const values = known.map(point => point.value)
+  const values = [...known.map(point => point.value), ...(usual ? [usual.low, usual.high] : [])]
   const [min, max] = [Math.min(...values), Math.max(...values)]
-  const x = (i: number) => 2 + (i / (weeks.length - 1)) * 116
-  const y = (value: number) => 30 - (max === min ? 14 : ((value - min) / (max - min)) * 28)
+  const x = (i: number) => 4 + (i / (weeks.length - 1)) * 124
+  const y = (value: number) => 44 - (max === min ? 20 : ((value - min) / (max - min)) * 40)
   const last = known.at(-1)!
   return (
-    <svg className="sparkline" viewBox="0 0 120 32" aria-hidden>
+    <svg className="sparkline" viewBox="0 0 132 48" aria-hidden>
+      {usual && <rect className="usual" x="0" width="132" y={y(usual.high)} height={y(usual.low) - y(usual.high)} rx="4" />}
       <polyline points={known.map(point => `${x(point.i)},${y(point.value)}`).join(' ')} />
-      <circle className={alert ? 'alert' : 'ok'} cx={x(last.i)} cy={y(last.value)} r="3" />
+      <circle className={tone} cx={x(last.i)} cy={y(last.value)} r="3.5" />
     </svg>
   )
 }
@@ -88,37 +93,52 @@ function ticks(min: number, max: number): number[] {
   return values
 }
 
-const CHART_HEIGHT = 240
+const CHART_HEIGHT = 260
 
-/** Nine weeks with a value scale and the usual range shaded; hovering a week shows its numbers. */
-function WeeksChart({ check, places }: { check: Check; places: number | null }) {
+/**
+ * The checked weeks, oldest first, each over its own usual range: the range moves as the weeks
+ * before it change. Alerts are red, good news green; hovering shows a week, clicking opens it.
+ */
+export function HistoryChart({
+  checks,
+  watch,
+  selected,
+  onSelect,
+}: {
+  checks: Check[]
+  watch: Watch
+  selected: Check
+  onSelect: (asOf: string) => void
+}) {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState<number | null>(null)
-  const { weeks, usual } = check
-  const values = weeks.flatMap(week => (week.value === null ? [] : [week.value]))
-  if (values.length === 0) return null
+  const places = placesOf(selected, watch)
+  // A change rule ignores the usual range, so the chart does not draw it.
+  const usualOf = (check: Check) => (watch.rule.kind === 'unusual' ? check.usual : null)
+  const bounds = checks.flatMap(check => [
+    ...(check.value === null ? [] : [check.value]),
+    ...(usualOf(check) ? [usualOf(check)!.low, usualOf(check)!.high] : []),
+  ])
+  if (bounds.length === 0) return null
 
-  const bounds = [...values, ...(usual ? [usual.low, usual.high] : [])]
   const pad = (Math.max(...bounds) - Math.min(...bounds)) * 0.1 || Math.abs(bounds[0]) * 0.1 || 1
   const [min, max] = [Math.min(...bounds) - pad, Math.max(...bounds) + pad]
   const scale = ticks(min, max)
-  const labels = scale.map(tick => formatValue(tick, places))
-  const [top, right, bottom, left] = [12, 16, CHART_HEIGHT - 28, 16 + Math.max(...labels.map(label => label.length)) * 7]
-  const last = weeks.length - 1
-  const x = (i: number) => left + (i / last) * (width - left - right)
+  const labels = scale.map(tick => formatMetric(tick, watch, places))
+  const [top, right, bottom, left] = [12, 8, CHART_HEIGHT - 28, 16 + Math.max(...labels.map(label => label.length)) * 7]
+  const column = (width - left - right) / checks.length
+  const x = (i: number) => left + (i + 0.5) * column
   const y = (value: number) => bottom - ((value - min) / (max - min)) * (bottom - top)
-  const points = weeks.flatMap((week, i) => (week.value === null ? [] : [{ i, value: week.value }]))
-  // Nine dates do not fit side by side on a phone: keep every other one, ending on the checked week.
-  const every = width < 520 ? 2 : 1
+  const points = checks.flatMap((check, i) => (check.value === null ? [] : [{ i, value: check.value, tone: verdict(check, watch).tone }]))
+  const at = checks.indexOf(selected)
+  // Dates do not fit in narrow columns: keep every other one, ending on the newest week.
+  const every = column < 56 ? 2 : 1
 
-  const move = (event: PointerEvent<SVGSVGElement>) => {
+  const indexAt = (event: MouseEvent<SVGSVGElement>) => {
     const offset = event.clientX - event.currentTarget.getBoundingClientRect().left
-    setHover(Math.min(last, Math.max(0, Math.round(((offset - left) / (width - left - right)) * last))))
+    return Math.min(checks.length - 1, Math.max(0, Math.floor((offset - left) / column)))
   }
-  const hovered = hover === null ? null : weeks[hover]
-  const before = hover ? weeks[hover - 1].value : null
-  const change = hovered?.value != null && before ? Math.round((hovered.value / before - 1) * 100) : null
-  const tipY = hovered?.value != null ? y(hovered.value) : top
+  const hovered = hover === null ? null : checks[hover]
 
   return (
     <figure className="weeks-chart" ref={ref}>
@@ -127,10 +147,25 @@ function WeeksChart({ check, places }: { check: Check; places: number | null }) 
           width={width}
           height={CHART_HEIGHT}
           role="img"
-          aria-label={`${check.name} by week: ${weeks.map(week => `${shortDay(week.from)} ${formatValue(week.value, places)}`).join(', ')}`}
-          onPointerMove={move}
+          aria-label={`${watch.name} by week: ${checks.map(check => `${shortDay(check.from)} ${formatMetric(check.value, watch, places)}`).join(', ')}`}
+          onPointerMove={event => setHover(indexAt(event))}
           onPointerLeave={() => setHover(null)}
+          onClick={event => onSelect(checks[indexAt(event)].asOf)}
         >
+          {at >= 0 && <rect className="selected" x={left + at * column} width={column} y={top - 6} height={bottom - top + 12} rx="6" />}
+          {checks.map((check, i) => {
+            const usual = usualOf(check)
+            return usual ? (
+              <rect
+                key={`usual-${check.asOf}`}
+                className="usual"
+                x={left + i * column}
+                width={column}
+                y={y(usual.high)}
+                height={Math.max(1, y(usual.low) - y(usual.high))}
+              />
+            ) : null
+          })}
           {scale.map((tick, i) => (
             <g key={tick}>
               <line className="grid" x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} />
@@ -139,23 +174,21 @@ function WeeksChart({ check, places }: { check: Check; places: number | null }) 
               </text>
             </g>
           ))}
-          {usual && <rect className="usual" x={left} width={width - left - right} y={y(usual.high)} height={y(usual.low) - y(usual.high)} rx="4" />}
-          {weeks.map((week, i) =>
-            i % every === last % every ? (
-              <text key={week.from} className={i === last ? 'tick current' : 'tick'} x={x(i)} y={CHART_HEIGHT - 6} textAnchor="middle">
-                {shortDay(week.from)}
+          {checks.map((check, i) =>
+            (checks.length - 1 - i) % every === 0 ? (
+              <text key={check.asOf} className={i === at ? 'tick current' : 'tick'} x={x(i)} y={CHART_HEIGHT - 6} textAnchor="middle">
+                {shortDay(check.from)}
               </text>
             ) : null,
           )}
-          {hover !== null && <line className="guide" x1={x(hover)} x2={x(hover)} y1={top} y2={bottom} />}
           <polyline className="line" points={points.map(point => `${x(point.i)},${y(point.value)}`).join(' ')} />
           {points.map(point => (
             <circle
               key={point.i}
-              className={point.i === last ? (check.alert ? 'point alert' : 'point ok') : 'point'}
+              className={`point ${point.tone}`}
               cx={x(point.i)}
               cy={y(point.value)}
-              r={point.i === last || point.i === hover ? 6 : 3.5}
+              r={point.i === at || point.i === hover ? 6 : point.tone === 'bad' || point.tone === 'good' ? 5 : 3.5}
             />
           ))}
         </svg>
@@ -164,27 +197,117 @@ function WeeksChart({ check, places }: { check: Check; places: number | null }) 
         // Beside the point, towards the middle, so it covers neither the point nor its neighbours' line.
         <div
           className={x(hover) > width / 2 ? 'chart-tip left' : 'chart-tip'}
-          style={{ left: x(hover), top: Math.min(bottom - 60, Math.max(top + 60, tipY)) }}
+          style={{ left: x(hover), top: Math.min(bottom - 60, Math.max(top + 60, hovered.value === null ? top : y(hovered.value))) }}
           aria-hidden
         >
           <span className="dm-muted">{formatRange(hovered.from, hovered.to)}</span>
           <strong>
-            {check.name} {formatValue(hovered.value, places)}
+            {watch.name} {formatMetric(hovered.value, watch, places)}
           </strong>
-          {change !== null && (
+          {hovered.change !== null && (
             <span>
-              <Change value={change} /> vs the week before
+              <Change value={hovered.change} tone={verdict(hovered, watch).tone} /> vs the week before
             </span>
           )}
-          {hover === last && <span className={check.alert ? 'alert-text' : 'dm-muted'}>{check.reason}</span>}
+          <span>{standing(hovered, watch)}</span>
         </div>
       )}
-      {usual && (
-        <figcaption className="legend dm-muted">
-          <i aria-hidden /> Usual range {formatValue(usual.low, places)}–{formatValue(usual.high, places)}, from the eight weeks before
-        </figcaption>
-      )}
     </figure>
+  )
+}
+
+/** The checked weeks as buttons, oldest first: the chart's points, readable and reachable by keyboard. */
+export function WeekStrip({
+  checks,
+  watch,
+  selected,
+  onSelect,
+}: {
+  checks: Check[]
+  watch: Watch
+  selected: Check
+  onSelect: (asOf: string) => void
+}) {
+  const places = placesOf(selected, watch)
+  const ref = useRef<HTMLDivElement>(null)
+  // The newest weeks are on the right: keep the selected one in view when the strip scrolls.
+  useLayoutEffect(() => {
+    const strip = ref.current
+    const button = strip?.querySelector<HTMLElement>('.week.selected')
+    if (!strip || !button) return
+    if (button.offsetLeft + button.offsetWidth > strip.scrollLeft + strip.clientWidth || button.offsetLeft < strip.scrollLeft) {
+      strip.scrollLeft = button.offsetLeft + button.offsetWidth - strip.clientWidth
+    }
+  }, [selected])
+  return (
+    <div className="week-strip" role="group" aria-label="Checked weeks" ref={ref}>
+      {checks.map(check => {
+        const result = verdict(check, watch)
+        return (
+          <button
+            key={check.asOf}
+            className={check === selected ? 'week selected' : 'week'}
+            aria-pressed={check === selected}
+            aria-label={`${formatRange(check.from, check.to)}: ${formatMetric(check.value, watch, places)}, ${result.label}`}
+            onClick={() => onSelect(check.asOf)}
+          >
+            <span className="week-day">
+              <i className={`dot ${result.tone}`} aria-hidden />
+              {shortDay(check.from)}
+            </span>
+            <span className="week-value">{formatMetric(check.value, watch, places)}</span>
+            <Change value={check.change} tone={result.tone} />
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** The checked week's value and where it stands. */
+export function WeekKpi({ check, watch }: { check: Check; watch: Watch }) {
+  const places = placesOf(check, watch)
+  const result = verdict(check, watch)
+  return (
+    <section className="dm-card kpi-card" aria-labelledby="kpi-title">
+      <span id="kpi-title" className="kpi-label">
+        {formatRange(check.from, check.to)}
+      </span>
+      <span className="big-value">{formatMetric(check.value, watch, places)}</span>
+      <span className="kpi-note">
+        <Change value={check.change} tone={result.tone} /> vs {formatMetric(check.previousValue, watch, places)} the week before
+      </span>
+      <span className={`badge large ${result.tone}`}>
+        {result.tone === 'bad' ? <TriangleAlert size={14} aria-hidden /> : result.tone === 'good' ? <TrendingUp size={14} aria-hidden /> : null}
+        {standing(check, watch)}
+      </span>
+    </section>
+  )
+}
+
+/** The week's change in words: what drove it and what each column adds. */
+export function WhatHappened({ check, watch }: { check: Check; watch: Watch }) {
+  const explanation = explain(check, watch)
+  const fallback =
+    check.value === null
+      ? check.reason
+      : check.previousValue === null
+        ? 'No week before to compare with.'
+        : `${watch.name} moved ${signedPercent(check.change ?? 0)} against the week before, too little to name a cause.`
+  return (
+    <section className="happened" aria-labelledby="happened-title">
+      <span id="happened-title" className="happened-label">
+        <Lightbulb size={16} aria-hidden /> What happened
+      </span>
+      <p className="happened-headline">{explanation?.headline ?? fallback}</p>
+      {explanation && explanation.points.length > 0 && (
+        <ul>
+          {explanation.points.map(point => (
+            <li key={point}>{point}</li>
+          ))}
+        </ul>
+      )}
+    </section>
   )
 }
 
@@ -194,48 +317,53 @@ function Percent({ value }: { value: number | null }) {
   return <span className={Math.abs(value) >= 25 ? 'big-change' : undefined}>{signedPercent(value)}</span>
 }
 
-/** Which values of one column moved the metric, a column at a time, starting with the strongest driver. */
-function WhyItChanged({ check, watch, places }: { check: Check; watch: Watch; places: number | null }) {
+/** Which values of one column moved the metric, a column at a time, starting with the one the headline names. */
+export function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
+  const places = placesOf(check, watch)
   const ratio = watch.denominator !== null
   const change = check.value !== null && check.previousValue !== null ? check.value - check.previousValue : 0
-  const strongest = (breakdown: Breakdown) =>
-    Math.max(0, ...breakdown.segments.map(segment => shareOf(segment, breakdown.segments, change) ?? 0))
-  const [dimension, setDimension] = useState(() => [...check.breakdowns].sort((a, b) => strongest(b) - strongest(a))[0]?.dimension)
+  const found = drivers(check)
+  const [dimension, setDimension] = useState(() => leadDriver(found)?.dimension ?? check.breakdowns[0]?.dimension)
   const selected = check.breakdowns.find(breakdown => breakdown.dimension === dimension) ?? check.breakdowns[0]
   if (!selected) return null
   const largest = Math.max(...selected.segments.map(segment => Math.abs(segment.contribution)), Number.EPSILON)
+  const leadOf = (name: string) => {
+    const driver = found.find(item => item.dimension === name)
+    if (!driver) return 'Nothing to name'
+    return driver.share >= 50 ? driver.top.name : 'No single value'
+  }
+  const goodWeek = verdict(check, watch).tone === 'good'
 
   return (
-    <section aria-labelledby="why-title">
-      <div className="why-head">
-        <h2 id="why-title" className="section-title">
-          Why it changed
-        </h2>
-        {check.breakdowns.length > 1 && (
-          <div className="segmented" role="group" aria-label="Explain by">
-            {check.breakdowns.map(breakdown => (
-              <button key={breakdown.dimension} aria-pressed={breakdown === selected} onClick={() => setDimension(breakdown.dimension)}>
-                {breakdown.dimension}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+    <section className="dm-card" aria-labelledby="why-title">
+      <h2 id="why-title" className="card-title">
+        Why it changed
+      </h2>
       {selected.segments.length === 0 ? (
-        <p className="dm-muted hint">Nothing to compare with the week before.</p>
+        <p className="dm-muted hint flush">Nothing to compare with the week before.</p>
       ) : (
         <>
-          <p className="dm-muted hint">
-            Impact is how much each {selected.dimension} moved {check.name} from {formatValue(check.previousValue, places)} to{' '}
-            {formatValue(check.value, places)}. The impacts add up to {signed(change, places)}.
+          <p className="dm-muted hint flush">
+            How much each {selected.dimension} moved {watch.name} from {formatMetric(check.previousValue, watch, places)} to{' '}
+            {formatMetric(check.value, watch, places)}. The parts add up to {formatDelta(change, watch, places)}.
           </p>
+          {check.breakdowns.length > 1 && (
+            <div className="dimension-tabs" role="group" aria-label="Explain by">
+              {check.breakdowns.map(breakdown => (
+                <button key={breakdown.dimension} aria-pressed={breakdown === selected} onClick={() => setDimension(breakdown.dimension)}>
+                  <span className="dm-muted">{breakdown.dimension}</span>
+                  <strong>{leadOf(breakdown.dimension)}</strong>
+                </button>
+              ))}
+            </div>
+          )}
           <div className="table-wrap">
             <table className="why-table">
               <thead>
                 <tr>
                   <th scope="col">{selected.dimension}</th>
                   <th scope="col" className="num">
-                    {check.name}, before → now
+                    {watch.name}, before → now
                   </th>
                   {ratio && (
                     <th scope="col" className="num">
@@ -245,24 +373,27 @@ function WhyItChanged({ check, watch, places }: { check: Check; watch: Watch; pl
                   <th scope="col" className="num">
                     {ratio ? watch.numerator : 'Change'}
                   </th>
-                  <th scope="col">Impact on {check.name}</th>
+                  <th scope="col">Part of the change</th>
                 </tr>
               </thead>
               <tbody>
                 {selected.segments.map(segment => {
                   const part = shareOf(segment, selected.segments, change)
                   const width = `${(Math.abs(segment.contribution) / largest) * 50}%`
-                  const impact = signed(segment.contribution, places)
+                  const impact = formatDelta(segment.contribution, watch, places)
+                  const zero = !/[1-9]/.test(impact)
+                  // Green when the value pushed the watch the good way, by its rise setting; red when the bad way.
+                  const helped = segment.contribution > 0 === ((watch.rise ?? 'good') === 'good')
                   return (
-                    <tr key={segment.name} className={part !== null && part >= 50 ? 'driver' : undefined}>
+                    <tr key={segment.name} className={part !== null && part >= 50 && !goodWeek ? 'driver' : undefined}>
                       <th scope="row">{segment.name}</th>
                       <td className="num">
                         {segment.value === null && segment.previousValue === null ? (
                           <span className="dm-muted">—</span>
                         ) : (
                           <>
-                            <span className="dm-muted">{formatValue(segment.previousValue, places)} → </span>
-                            {formatValue(segment.value, places)}
+                            <span className="dm-muted">{formatMetric(segment.previousValue, watch, places)} → </span>
+                            {formatMetric(segment.value, watch, places)}
                           </>
                         )}
                       </td>
@@ -277,18 +408,16 @@ function WhyItChanged({ check, watch, places }: { check: Check; watch: Watch; pl
                       <td>
                         <span className="impact">
                           <span className="driver-bar" aria-hidden>
-                            {impact !== formatValue(0, places) && (
+                            {!zero && (
                               <span
-                                className={segment.contribution < 0 ? 'down' : 'up'}
+                                className={helped ? 'good' : 'bad'}
                                 style={segment.contribution < 0 ? { right: '50%', width } : { left: '50%', width }}
                               />
                             )}
                           </span>
                           <span className="num">
                             {impact}
-                            {part !== null && part > 0 && impact !== formatValue(0, places) && (
-                              <span className="dm-muted"> · {part}%</span>
-                            )}
+                            {part !== null && part > 0 && !zero && <span className="dm-muted"> · {part}%</span>}
                           </span>
                         </span>
                       </td>
@@ -300,31 +429,6 @@ function WhyItChanged({ check, watch, places }: { check: Check; watch: Watch; pl
           </div>
         </>
       )}
-    </section>
-  )
-}
-
-/** One checked week: the value, the usual range, and what moved it. */
-export function CheckView({ check, watch }: { check: Check; watch: Watch }) {
-  const places = placesFor(watch.denominator !== null, check.value ?? check.previousValue)
-  return (
-    <section className="dm-card" aria-labelledby="check-title">
-      <div className="headline">
-        <div>
-          <div id="check-title" className="kpi-label">
-            {check.name} · {formatRange(check.from, check.to)}
-          </div>
-          <div className="big-value">{formatValue(check.value, places)}</div>
-          <div className="kpi-note">
-            <Change value={check.change} /> vs {formatValue(check.previousValue, places)} the week before
-          </div>
-        </div>
-        <StatusBadge alert={check.alert} />
-      </div>
-      <p className={check.alert ? 'reason alert-text' : 'reason dm-muted'}>{check.reason}</p>
-      <WeeksChart check={check} places={places} />
-      <p className="quote">{check.text}</p>
-      <WhyItChanged check={check} watch={watch} places={places} />
       <p className="dm-muted hint">
         Checked <CheckedAt iso={check.checkedAt} />
       </p>

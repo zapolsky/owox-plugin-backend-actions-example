@@ -2,7 +2,8 @@
 
 This is an example OWOX Data Marts plugin with backend actions: Metric Watch. A member picks a
 Data Mart metric, such as ROAS as the sum of revenue divided by the sum of cost, and the columns
-that explain it, such as channel, campaign and country. The page starts `check-metric`; the Worker
+that explain it, such as channel, campaign and country, how its value reads and whether a rise is
+good or bad. The page starts `check-metric`; the Worker
 reads daily sums through HTTP Data, compares the last full week with the eight weeks before,
 splits the change between the values of each column and saves one check per week to the `checks`
 collection. A check started before the plugin closed is there when it reopens. With an optional
@@ -16,8 +17,8 @@ One Cloudflare Worker serves the page from `dist/` and runs the actions at `/owo
 - `worker/index.ts`: the actions, built with `createBackend` from `@owox/plugin-sdk/server`.
 - `worker/google.ts`: the export target of a Doc or Sheet link and what a check adds there;
   `worker/google.test.ts` tests the link.
-- `worker/watch.ts`: the usual range, the split of a change and the check text;
-  `worker/watch.test.ts` tests them.
+- `worker/watch.ts`: the usual range, the verdict of a week, the split of a change, the words that
+  explain it and how a value reads; `worker/watch.test.ts` tests them.
 - `plugin.json`: the manifest. OWOX reads it from the release commit. Within a compatibility line a
   release may add actions but must not remove one.
 - `public/_headers`: sends `Access-Control-Allow-Origin: *`, without which the page's module

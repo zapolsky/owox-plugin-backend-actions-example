@@ -1,20 +1,55 @@
-import { useState, type ReactNode } from 'react'
-import { ArrowLeft, FileUp, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
-import { formatRange, formatValue, placesFor, type Check, type Watch } from '../worker/watch'
-import { Change, CheckView, StatusBadge } from './CheckView'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowLeft, Ellipsis, FileUp, LoaderCircle, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { exportTarget } from '../worker/google'
+import { formatRange, verdict, type Check, type Watch } from '../worker/watch'
+import { HistoryChart, WeekKpi, WeekStrip, WhatHappened, WhyItChanged } from './CheckView'
 
-const ruleText = (watch: Watch) =>
-  watch.rule.kind === 'unusual'
-    ? 'Alerts when a week is outside the usual range of the eight weeks before.'
-    : `Alerts when it changes by more than ${watch.rule.percent}% ${
-        watch.rule.direction === 'any' ? 'either way' : watch.rule.direction
-      } against the week before.`
+/** Weeks the chart and the strip show, the newest last. */
+const SHOWN_WEEKS = 12
 
-/** Sends the selected week to a Google Doc or Sheet; the link decides which. */
-function ExportWeek({ onExport }: { onExport: (link: string) => Promise<string> }) {
+const formula = (watch: Watch) => (watch.denominator ? `${watch.numerator} ÷ ${watch.denominator}` : `sum of ${watch.numerator}`)
+
+const ruleText = (watch: Watch) => {
+  if (watch.rule.kind === 'change') {
+    return `alerts on a change of more than ${watch.rule.percent}% ${
+      watch.rule.direction === 'any' ? 'either way' : watch.rule.direction
+    } against the week before`
+  }
+  const side = (watch.rise ?? 'good') === 'good' ? 'falls below' : 'rises above'
+  const sensitivity = { low: ', fewer alerts', medium: '', high: ', more alerts' }[watch.sensitivity ?? 'medium']
+  return `alerts when a week ${side} its usual range${sensitivity}`
+}
+
+/** Closes a popover on a press outside it. */
+function useDismiss(open: boolean, close: () => void) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const press = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) close()
+    }
+    document.addEventListener('pointerdown', press)
+    return () => document.removeEventListener('pointerdown', press)
+  }, [open, close])
+  return ref
+}
+
+/** Sends the selected week to a Google Doc or Sheet; a pasted link picks which. */
+function ExportMenu({ range, onExport }: { range: string; onExport: (link: string) => Promise<string> }) {
+  const [open, setOpen] = useState(false)
+  const [kind, setKind] = useState<'Doc' | 'Sheet'>('Doc')
   const [link, setLink] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const close = () => setOpen(false)
+  const ref = useDismiss(open, close)
+
+  const paste = (value: string) => {
+    setLink(value)
+    setResult(null)
+    const target = exportTarget(value)
+    if (target) setKind(target.action === 'export-check-to-doc' ? 'Doc' : 'Sheet')
+  }
   const submit = () => {
     setBusy(true)
     setResult(null)
@@ -25,26 +60,108 @@ function ExportWeek({ onExport }: { onExport: (link: string) => Promise<string> 
       )
       .finally(() => setBusy(false))
   }
+
   return (
-    // Not a form: the plugin frame's sandbox blocks form submission.
-    <section className="dm-card export">
-      <label className="field">
-        Google Doc or Sheet shared with the service account
-        <input type="url" value={link} onChange={event => setLink(event.target.value)} placeholder="https://docs.google.com/…" />
-      </label>
-      <button className="button secondary" onClick={submit} disabled={busy || !link.trim()}>
-        {busy ? <LoaderCircle className="spin" size={16} aria-hidden /> : <FileUp size={16} aria-hidden />} Export week
+    <div className="menu-anchor" ref={ref}>
+      <button className="button secondary" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <FileUp size={16} aria-hidden /> Export
       </button>
-      {result && (
-        <p role={result.ok ? 'status' : 'alert'} className={result.ok ? 'dm-muted' : 'alert'}>
-          {result.text}
-        </p>
+      {open && (
+        // Not a form: the plugin frame's sandbox blocks form submission.
+        <div className="popover" role="dialog" aria-label={`Export ${range}`} onKeyDown={event => event.key === 'Escape' && close()}>
+          <strong>Export {range}</strong>
+          <div className="segmented wide" role="group" aria-label="Export to">
+            {(['Doc', 'Sheet'] as const).map(item => (
+              <button key={item} aria-pressed={kind === item} onClick={() => setKind(item)}>
+                Google {item}
+              </button>
+            ))}
+          </div>
+          <label className="field">
+            Link to the {kind}
+            <input
+              type="url"
+              autoFocus
+              value={link}
+              onChange={event => paste(event.target.value)}
+              placeholder={`https://docs.google.com/${kind === 'Doc' ? 'document' : 'spreadsheets'}/d/…`}
+            />
+          </label>
+          <p className="dm-muted hint flush">
+            Share the {kind} with the plugin's service account first. The week is added {kind === 'Doc' ? 'at the end' : 'as a row'}.
+          </p>
+          {result && (
+            <p role={result.ok ? 'status' : 'alert'} className={result.ok ? 'dm-muted flush' : 'alert'}>
+              {result.text}
+            </p>
+          )}
+          <div className="actions end">
+            <button className="button secondary" onClick={close}>
+              {result?.ok ? 'Close' : 'Cancel'}
+            </button>
+            <button className="button" onClick={submit} disabled={busy || !link.trim()}>
+              {busy && <LoaderCircle className="spin" size={16} aria-hidden />} Add to {kind}
+            </button>
+          </div>
+        </div>
       )}
-    </section>
+    </div>
   )
 }
 
-/** One watch: the selected week (the latest by default) and the history of checked weeks. */
+/** Edit and Delete, behind one button; Delete asks once. */
+function MoreMenu({ name, weeks, onEdit, onDelete }: { name: string; weeks: number; onEdit: () => void; onDelete: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const close = () => {
+    setOpen(false)
+    setConfirming(false)
+  }
+  const ref = useDismiss(open, close)
+  return (
+    <div className="menu-anchor" ref={ref}>
+      <button className="button secondary icon" aria-label="More actions" aria-expanded={open} onClick={() => (open ? close() : setOpen(true))}>
+        <Ellipsis size={18} aria-hidden />
+      </button>
+      {open && (
+        <div className="popover menu" onKeyDown={event => event.key === 'Escape' && close()}>
+          {confirming ? (
+            <>
+              <p className="flush">
+                Delete {name} and its {weeks} checked {weeks === 1 ? 'week' : 'weeks'}?
+              </p>
+              <div className="actions end">
+                <button className="button secondary" onClick={() => setConfirming(false)}>
+                  Keep
+                </button>
+                <button className="button danger" onClick={onDelete}>
+                  Delete
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <button
+                className="menu-item"
+                onClick={() => {
+                  close()
+                  onEdit()
+                }}
+              >
+                <Pencil size={16} aria-hidden /> Edit watch
+              </button>
+              <button className="menu-item danger" onClick={() => setConfirming(true)}>
+                <Trash2 size={16} aria-hidden /> Delete watch…
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** One watch: the selected week (the latest by default), what happened, the last weeks and why it changed. */
 export function WatchPage({
   watchId,
   watch,
@@ -56,6 +173,7 @@ export function WatchPage({
   onSelect,
   onCheck,
   onCancel,
+  onEdit,
   onDelete,
   onExport,
 }: {
@@ -69,14 +187,13 @@ export function WatchPage({
   onSelect: (asOf: string) => void
   onCheck: () => void
   onCancel: () => void
+  onEdit: () => void
   onDelete: () => void
   onExport: (checkId: string, link: string) => Promise<string>
 }) {
-  const [confirming, setConfirming] = useState(false)
   const selected = history.find(check => check.asOf === asOf) ?? history[0]
-  const alerts = history.filter(check => check.alert).length
-  // One precision for the whole list, so the values line up.
-  const places = placesFor(watch?.denominator != null, selected ? (selected.value ?? selected.previousValue) : null)
+  const recent = history.slice(0, SHOWN_WEEKS).reverse()
+  const alerts = watch ? recent.filter(check => verdict(check, watch).tone === 'bad').length : 0
 
   return (
     <div className="dm-page">
@@ -88,7 +205,7 @@ export function WatchPage({
           <h1 className="dm-page-header-title">{watch?.name ?? 'Watch'}</h1>
           {watch && (
             <p className="dm-muted subtitle">
-              {watch.dataMartTitle} · {ruleText(watch)}
+              {watch.dataMartTitle} · {formula(watch)} · {ruleText(watch)}
             </p>
           )}
         </div>
@@ -102,20 +219,14 @@ export function WatchPage({
               <RefreshCw size={16} aria-hidden /> Check now
             </button>
           )}
-          {confirming ? (
-            <>
-              <button className="button danger" onClick={onDelete}>
-                Delete watch and history
-              </button>
-              <button className="button secondary" onClick={() => setConfirming(false)}>
-                Keep
-              </button>
-            </>
-          ) : (
-            <button className="button secondary icon" onClick={() => setConfirming(true)} aria-label="Delete watch">
-              <Trash2 size={16} aria-hidden />
-            </button>
+          {watch && selected && (
+            <ExportMenu
+              key={selected.asOf}
+              range={formatRange(selected.from, selected.to)}
+              onExport={link => onExport(`${watchId}~${selected.asOf}`, link)}
+            />
           )}
+          {watch && <MoreMenu name={watch.name} weeks={history.length} onEdit={onEdit} onDelete={onDelete} />}
         </div>
       </header>
       <main className="dm-page-content">
@@ -123,47 +234,50 @@ export function WatchPage({
         {running && (
           <p className="dm-card status" role="status">
             <LoaderCircle className="spin" size={16} aria-hidden />
-            Checking {history.length === 0 ? 'the last 12 weeks' : 'the last week'}. You can close the plugin: the result is
-            saved here.
+            Checking {history.length === 0 ? 'the last 12 weeks' : 'the last week'}. You can close the plugin: the result is saved
+            here.
           </p>
         )}
         {watch && selected ? (
           <>
-            <CheckView key={`${watchId}~${selected.asOf}`} check={selected} watch={watch} />
-            <ExportWeek onExport={link => onExport(`${watchId}~${selected.asOf}`, link)} />
+            <div className="hero">
+              <WeekKpi check={selected} watch={watch} />
+              <WhatHappened check={selected} watch={watch} />
+            </div>
+            <section className="dm-card" aria-labelledby="weeks-title">
+              <div className="card-head">
+                <h2 id="weeks-title" className="card-title">
+                  Last {recent.length} {recent.length === 1 ? 'week' : 'weeks'}
+                  <span className="dm-muted">
+                    {alerts} {alerts === 1 ? 'alert' : 'alerts'}
+                  </span>
+                </h2>
+                <p className="legend dm-muted">
+                  <span>
+                    <i className="line" aria-hidden /> {watch.name}
+                  </span>
+                  {watch.rule.kind === 'unusual' && (
+                    <span>
+                      <i className="band" aria-hidden /> Usual range of each week
+                    </span>
+                  )}
+                  <span>
+                    <i className="dot bad" aria-hidden /> Alert
+                  </span>
+                  {watch.rule.kind === 'unusual' && (
+                    <span>
+                      <i className="dot good" aria-hidden /> Good news
+                    </span>
+                  )}
+                </p>
+              </div>
+              <HistoryChart checks={recent} watch={watch} selected={selected} onSelect={onSelect} />
+              <WeekStrip checks={recent} watch={watch} selected={selected} onSelect={onSelect} />
+            </section>
+            <WhyItChanged key={`${watchId}~${selected.asOf}`} check={selected} watch={watch} />
           </>
         ) : (
           !running && <section className="dm-card empty dm-muted">No checked weeks yet. Check now to see the last one.</section>
-        )}
-        {watch && history.length > 0 && (
-          <section className="dm-card" aria-labelledby="history-title">
-            <h2 id="history-title" className="card-title">
-              History
-              <span className="dm-muted">
-                {history.length} {history.length === 1 ? 'week' : 'weeks'} · {alerts} {alerts === 1 ? 'alert' : 'alerts'}
-              </span>
-            </h2>
-            <ul className="history">
-              {history.map(check => (
-                <li key={check.asOf}>
-                  <button
-                    className={check === selected ? 'history-row selected' : 'history-row'}
-                    aria-current={check === selected ? 'true' : undefined}
-                    onClick={() => {
-                      onSelect(check.asOf)
-                      // The week opens above the history, out of view from a row near the bottom.
-                      window.scrollTo({ top: 0 })
-                    }}
-                  >
-                    <span>{formatRange(check.from, check.to)}</span>
-                    <span className="history-value">{formatValue(check.value, places)}</span>
-                    <Change value={check.change} />
-                    <StatusBadge alert={check.alert} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
         )}
       </main>
     </div>

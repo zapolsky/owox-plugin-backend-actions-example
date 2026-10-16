@@ -3,6 +3,15 @@ export type Rule =
   | { kind: 'unusual' }
   | { kind: 'change'; percent: number; direction: 'down' | 'up' | 'any' }
 
+/** How a watch's values read: `54,138`, `$54,138`, `1.96%` or `1.99×`. */
+export type Format = 'number' | 'money' | 'percent' | 'times'
+
+/** How unusual a week must be to count: fewer alerts at low, more at high. */
+export type Sensitivity = 'low' | 'medium' | 'high'
+
+/** Robust deviations from the median that bound the usual range at each sensitivity. */
+export const DEVIATIONS: Record<Sensitivity, number> = { low: 4, medium: 3, high: 2 }
+
 /** A Data Mart metric to watch, saved in the `watches` collection. */
 export type Watch = {
   /** What the metric is called, such as ROAS. */
@@ -16,6 +25,14 @@ export type Watch = {
   /** Up to three columns that explain a change, such as channel, campaign and country. */
   dimensions: string[]
   rule: Rule
+  /** `number` when unset, as for watches saved before formats. */
+  format?: Format
+  /** An ISO 4217 code for the `money` format; USD when unset. */
+  currency?: string
+  /** Whether a rise is good news, as for revenue (the default), or bad, as for cost. */
+  rise?: 'good' | 'bad'
+  /** `medium` when unset. */
+  sensitivity?: Sensitivity
 }
 
 /** Sums for one day, and for one value of a dimension when `segment` is set. */
@@ -112,6 +129,35 @@ export function signed(value: number, places: number | null): string {
   return /[1-9]/.test(text) ? `${value > 0 ? '+' : '−'}${text}` : text
 }
 
+/** A watch's value as it reads: `54,138`, `$54,138`, `$76.99`, `1.96%`, `10.1%` or `1.99×`. */
+export function formatMetric(
+  value: number | null,
+  watch: Pick<Watch, 'format' | 'currency'>,
+  places: number | null,
+): string {
+  if (value === null) return '—'
+  if (watch.format === 'percent') return `${formatValue(value * 100, Math.abs(value) >= 0.1 ? 1 : 2)}%`
+  if (watch.format === 'times') return `${formatValue(value, 2)}×`
+  if (watch.format === 'money') {
+    return value.toLocaleString('en-US', {
+      style: 'currency',
+      currency: watch.currency ?? 'USD',
+      minimumFractionDigits: places ?? 0,
+      maximumFractionDigits: places ?? 0,
+    })
+  }
+  return formatValue(value, places)
+}
+
+/** A part of a change in the watch's terms: `−0.71`, `−$2,972`, `−0.50 pp`; no sign when it rounds to zero. */
+export function formatDelta(value: number, watch: Pick<Watch, 'format' | 'currency'>, places: number | null): string {
+  if (watch.format === 'percent') return `${signed(value * 100, 2)} pp`
+  if (watch.format === 'times') return signed(value, 2)
+  if (watch.format !== 'money') return signed(value, places)
+  const text = formatMetric(Math.abs(value), watch, places)
+  return /[1-9]/.test(text) ? `${value > 0 ? '+' : '−'}${text}` : text
+}
+
 type Sums = { numerator: number; denominator: number }
 
 const metric = (sums: Sums, ratio: boolean) =>
@@ -146,10 +192,13 @@ const middle = (values: number[]) => {
 }
 
 /**
- * Median ± 3 robust deviations (1.4826 × MAD, at least 5% of the median), so up to three unusual
- * weeks out of eight do not widen the range. Null with fewer than four weeks of data.
+ * Median ± `deviations` robust deviations (1.4826 × MAD, at least 5% of the median), so up to three
+ * unusual weeks out of eight do not widen the range. Null with fewer than four weeks of data.
  */
-export function usualRange(values: (number | null)[]): { low: number; high: number } | null {
+export function usualRange(
+  values: (number | null)[],
+  deviations = DEVIATIONS.medium,
+): { low: number; high: number } | null {
   const known = values.filter((value): value is number => value !== null)
   if (known.length < 4) return null
   const median = middle(known)
@@ -157,7 +206,7 @@ export function usualRange(values: (number | null)[]): { low: number; high: numb
     1.4826 * middle(known.map(value => Math.abs(value - median))),
     0.05 * Math.abs(median),
   )
-  return { low: median - 3 * spread, high: median + 3 * spread }
+  return { low: median - deviations * spread, high: median + deviations * spread }
 }
 
 /**
@@ -227,10 +276,12 @@ function judge(
   }
   if (watch.rule.kind === 'unusual') {
     if (!usual) return { alert: false, reason: 'Needs four earlier weeks with data to know the usual range.' }
-    const range = `${formatValue(usual.low, places)}–${formatValue(usual.high, places)}`
-    if (value < usual.low) return { alert: true, reason: `Below the usual ${range} of the eight weeks before.` }
-    if (value > usual.high) return { alert: true, reason: `Above the usual ${range} of the eight weeks before.` }
-    return { alert: false, reason: `Within the usual ${range} of the eight weeks before.` }
+    const range = `${formatMetric(usual.low, watch, places)}–${formatMetric(usual.high, watch, places)}`
+    const side = value < usual.low ? 'Below' : value > usual.high ? 'Above' : null
+    if (!side) return { alert: false, reason: `Within the usual ${range} of the eight weeks before.` }
+    // Only the bad side alerts: ROAS above its range is good news, cost above its range is not.
+    const alert = (side === 'Below') === ((watch.rise ?? 'good') === 'good')
+    return { alert, reason: `${side} the usual ${range} of the eight weeks before${alert ? '' : ', which is good news'}.` }
   }
   if (!previousValue) return { alert: false, reason: 'No week before to compare with.' }
   const change = (value / previousValue - 1) * 100
@@ -244,48 +295,161 @@ function judge(
 /** Below this, a weekly change is everyday noise, and naming what drove it would be guessing. */
 const EXPLAINED_CHANGE = 5
 
+/** The value of one dimension that moved the metric most its way, and its share of that move. */
+export type Driver = { dimension: string; top: Segment; share: number; segments: number }
+
+/**
+ * The top value of each dimension, strongest first: a country-wide problem leads with the country.
+ * None for a week without both values or with a change too small to explain.
+ */
+export function drivers(check: Pick<Check, 'value' | 'previousValue' | 'change' | 'breakdowns'>): Driver[] {
+  if (check.value === null || check.previousValue === null) return []
+  const whole = check.value - check.previousValue
+  if (whole === 0 || Math.abs(check.change ?? 0) < EXPLAINED_CHANGE) return []
+  return check.breakdowns
+    .flatMap(({ dimension, segments }) => {
+      const top = segments.find(segment => segment.contribution * whole > 0 && !segment.name.startsWith('Other ('))
+      return top ? [{ dimension, top, share: shareOf(top, segments, whole) ?? 0, segments: segments.length }] : []
+    })
+    .sort((a, b) => b.share - a.share)
+}
+
+/**
+ * The driver to name first. Among values that explain about as much as the strongest, the one from
+ * the dimension with the most values: campaign Spring_Broad says more than channel facebook / paid.
+ */
+export function leadDriver(found: readonly Driver[]): Driver | null {
+  const [strongest] = found
+  if (!strongest) return null
+  if (strongest.share < 50) return strongest
+  return found
+    .filter(driver => driver.share >= strongest.share - 10)
+    .reduce((best, driver) => (driver.segments > best.segments ? driver : best))
+}
+
+/** `cost more than doubled`, `orders fell 47%`, `revenue barely moved`. */
+function moved(column: string, change: number): string {
+  if (Math.abs(change) < 10) return `${column} barely moved`
+  if (change > 200) return `${column} more than tripled`
+  if (change > 100) return `${column} more than doubled`
+  return `${column} ${change > 0 ? 'rose' : 'fell'} ${Math.abs(change)}%`
+}
+
+/** What happened to a driver's columns: `cost more than doubled while revenue barely moved`. */
+function whatMoved(watch: Watch, top: Segment): string | null {
+  const sides: [string, number][] = []
+  if (top.numeratorChange !== null) sides.push([watch.numerator, top.numeratorChange])
+  if (watch.denominator && top.denominatorChange !== null) sides.push([watch.denominator, top.denominatorChange])
+  if (sides.length === 0) return null
+  sides.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+  if (sides.length === 1) return moved(...sides[0])
+  const [[, big], [, small]] = sides
+  const apart = Math.abs(small) < 10 || Math.sign(big) !== Math.sign(small)
+  return `${moved(...sides[0])} ${apart ? 'while' : 'and'} ${moved(...sides[1])}`
+}
+
+/** A driver's columns as changes: `cost +80%, revenue +2%`. */
+export function driverChanges(watch: Watch, top: Segment): string {
+  return [
+    watch.denominator && top.denominatorChange !== null ? `${watch.denominator} ${signedPercent(top.denominatorChange)}` : null,
+    top.numeratorChange !== null ? `${watch.numerator} ${signedPercent(top.numeratorChange)}` : null,
+  ]
+    .filter(Boolean)
+    .join(', ')
+}
+
+export type Explanation = { headline: string; points: string[] }
+
+/** A week's change in words: a headline that names its driver, and what each dimension adds. */
+export function explain(check: Check, watch: Watch): Explanation | null {
+  const found = drivers(check)
+  const lead = leadDriver(found)
+  if (!lead || check.value === null || check.previousValue === null) return null
+  const direction = check.value < check.previousValue ? 'drop' : 'rise'
+  const places = placesFor(watch.denominator !== null, check.value ?? check.previousValue)
+  const name = `${lead.dimension} ${lead.top.name}`
+  const what = whatMoved(watch, lead.top)
+  const headline =
+    lead.share < 50
+      ? `No single value explains the ${direction}; the largest part is ${name}, ${lead.share}%.`
+      : what
+        ? `In ${name}, ${what}.`
+        : `${name} explains ${lead.share >= 95 ? 'the whole' : `${lead.share}% of the`} ${direction}.`
+  const { previousValue, value } = lead.top
+  const moved =
+    previousValue === null || value === null
+      ? ''
+      : `${watch.name} ${formatMetric(previousValue, watch, places)} → ${formatMetric(value, watch, places)}`
+  // A sum's own column is the watch itself: name its change once.
+  const detail = watch.denominator
+    ? [driverChanges(watch, lead.top), moved].filter(Boolean).join(', ')
+    : moved && lead.top.numeratorChange !== null
+      ? `${moved} (${signedPercent(lead.top.numeratorChange)})`
+      : moved || driverChanges(watch, lead.top)
+  const points = [
+    ...(detail ? [`${name}: ${detail}.`] : []),
+    ...found
+      .filter(driver => driver.dimension !== lead.dimension)
+      .map(driver =>
+        driver.share >= 50
+          ? `${driver.dimension} ${driver.top.name} explains ${driver.share >= 95 ? 'all' : `${driver.share}%`} of the ${direction}.`
+          : `No single ${driver.dimension} stands out: the largest, ${driver.top.name}, explains ${driver.share}%.`,
+      ),
+  ]
+  return { headline, points }
+}
+
 function describe(watch: Watch, check: Omit<Check, 'text'>, places: number | null): string {
   const range = formatRange(check.from, check.to)
   if (check.value === null) return `${watch.name}, ${range}: ${check.reason}`
   const { change } = check
+  const value = formatMetric(check.value, watch, places)
   const moved =
     change === null
-      ? `was ${formatValue(check.value, places)}`
+      ? `was ${value}`
       : change === 0
-        ? `held at ${formatValue(check.value, places)}`
-        : `${change < 0 ? 'fell' : 'rose'} ${Math.abs(change)}% to ${formatValue(check.value, places)}`
+        ? `held at ${value}`
+        : `${change < 0 ? 'fell' : 'rose'} ${Math.abs(change)}% to ${value}`
   const sentences = [
-    `${watch.name}, ${range}: ${moved}${check.previousValue === null ? '' : ` (${formatValue(check.previousValue, places)} the week before)`}.`,
+    `${watch.name}, ${range}: ${moved}${check.previousValue === null ? '' : ` (${formatMetric(check.previousValue, watch, places)} the week before)`}.`,
   ]
   if (check.alert) sentences.push(check.reason)
 
-  const whole = check.value - (check.previousValue ?? 0)
-  if (check.previousValue === null || whole === 0 || Math.abs(change ?? 0) < EXPLAINED_CHANGE) {
-    return sentences.join(' ')
-  }
-  // The top value of each dimension, strongest first: a country-wide problem leads with the country.
-  const drivers = check.breakdowns
-    .flatMap(({ dimension, segments }) => {
-      const top = segments.find(segment => segment.contribution * whole > 0 && !segment.name.startsWith('Other ('))
-      return top ? [{ dimension, top, share: shareOf(top, segments, whole) ?? 0 }] : []
-    })
-    .sort((a, b) => b.share - a.share)
-  if (drivers.length === 0) return sentences.join(' ')
+  const found = drivers(check)
+  if (found.length === 0) return sentences.join(' ')
 
-  const named = ({ dimension, top, share }: (typeof drivers)[number]) => `${dimension} "${top.name}" (${share}%)`
-  const strong = drivers.filter(driver => driver.share >= 50)
+  const named = ({ dimension, top, share }: Driver) => `${dimension} "${top.name}" (${share}%)`
+  const strong = found.filter(driver => driver.share >= 50)
   sentences.push(
     strong.length > 0
       ? `Driven by ${strong.map(named).join(', ').replace(/, ([^,]*)$/, ' and $1')}.`
-      : `No single value explains most of it; the largest is ${named(drivers[0])}.`,
+      : `No single value explains most of it; the largest is ${named(found[0])}.`,
   )
-  const { top } = (strong[0] ?? drivers[0])
-  const sides = [
-    top.denominatorChange === null ? null : `${watch.denominator} ${signedPercent(top.denominatorChange)}`,
-    top.numeratorChange === null ? null : `${watch.numerator} ${signedPercent(top.numeratorChange)}`,
-  ].filter(Boolean)
-  if (sides.length > 0) sentences.push(`In "${top.name}", ${sides.join(', ')}.`)
+  const { top } = strong[0] ?? found[0]
+  const sides = driverChanges(watch, top)
+  if (sides) sentences.push(`In "${top.name}", ${sides}.`)
   return sentences.join(' ')
+}
+
+/** How a checked week reads now: `bad` alerts, `good` is outside the usual range on the good side. */
+export type Verdict = { tone: 'bad' | 'good' | 'usual' | 'none'; label: string }
+
+/**
+ * Judged again from the saved week, because a watch's rise setting can change after its check.
+ * A change rule keeps the check's own alert: its limit and direction re-check the history when edited.
+ */
+export function verdict(check: Pick<Check, 'value' | 'change' | 'usual' | 'alert'>, watch: Watch): Verdict {
+  if (check.value === null) return { tone: 'none', label: 'No data' }
+  if (watch.rule.kind === 'change') {
+    if (!check.alert) return { tone: 'usual', label: 'As usual' }
+    const change = check.change ?? 0
+    return { tone: 'bad', label: `${change < 0 ? 'Down' : 'Up'} ${Math.abs(change)}% · limit ${watch.rule.percent}%` }
+  }
+  if (!check.usual) return { tone: 'none', label: 'Too little history' }
+  const side = check.value < check.usual.low ? 'Below' : check.value > check.usual.high ? 'Above' : null
+  if (!side) return { tone: 'usual', label: 'As usual' }
+  const bad = (side === 'Below') === ((watch.rise ?? 'good') === 'good')
+  return { tone: bad ? 'bad' : 'good', label: `${side} usual` }
 }
 
 /**
@@ -322,7 +486,10 @@ export function checkWeek(
     return { ...window, value: sums.size > 0 ? metric(total(sums.values()), ratio) : null }
   })
   const [current, previous] = [weeks[BASELINE_WEEKS], weeks[BASELINE_WEEKS - 1]]
-  const usual = usualRange(weeks.slice(0, BASELINE_WEEKS).map(week => week.value))
+  const usual = usualRange(
+    weeks.slice(0, BASELINE_WEEKS).map(week => week.value),
+    DEVIATIONS[watch.sensitivity ?? 'medium'],
+  )
   const places = placesFor(ratio, current.value ?? previous.value)
   const change =
     current.value !== null && previous.value ? percent(current.value, previous.value) : null
@@ -347,9 +514,26 @@ export function checkWeek(
   return { ...check, text: describe(watch, check, places) }
 }
 
+/** Decimal places for a check's values, as its text uses them. */
+export const placesOf = (check: Pick<Check, 'value' | 'previousValue'>, watch: Watch) =>
+  placesFor(watch.denominator !== null, check.value ?? check.previousValue)
+
+/** Where the week stands against its rule: `Below the usual $17,624–$24,788`, `Down 23% · limit 15%`. */
+export function standing(check: Check, watch: Watch): string {
+  const result = verdict(check, watch)
+  if (result.tone === 'none') return check.reason
+  if (watch.rule.kind === 'change') {
+    return result.tone === 'bad' ? result.label : `Within ${watch.rule.percent}% of the week before`
+  }
+  const places = placesOf(check, watch)
+  const range = `${formatMetric(check.usual!.low, watch, places)}–${formatMetric(check.usual!.high, watch, places)}`
+  if (result.tone === 'usual') return `Within the usual ${range}`
+  return `${result.label === 'Below usual' ? 'Below' : 'Above'} the usual ${range}`
+}
+
 /** Explains which of the watched columns a Data Mart lacks. */
 export function missingColumnsMessage(title: string, missing: readonly string[]): string {
   const quoted = missing.map(column => `"${column}"`)
   const list = quoted.length > 1 ? `${quoted.slice(0, -1).join(', ')} or ${quoted.at(-1)}` : quoted[0]
-  return `${title} has no ${list} column any more. Fix the Data Mart, or delete the watch and create it again.`
+  return `${title} has no ${list} column any more. Fix the Data Mart, or edit the watch to use other columns.`
 }
