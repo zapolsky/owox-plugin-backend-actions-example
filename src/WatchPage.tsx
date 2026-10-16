@@ -42,6 +42,14 @@ function ExportMenu({ range, onExport }: { range: string; onExport: (link: strin
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
   const close = () => setOpen(false)
+  // Each opening starts empty, so a finished export cannot be sent twice by accident.
+  const toggle = () => {
+    if (!open) {
+      setLink('')
+      setResult(null)
+    }
+    setOpen(!open)
+  }
   const ref = useDismiss(open, close)
 
   const paste = (value: string) => {
@@ -63,7 +71,7 @@ function ExportMenu({ range, onExport }: { range: string; onExport: (link: strin
 
   return (
     <div className="menu-anchor" ref={ref}>
-      <button className="button secondary" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button className="button secondary" aria-expanded={open} onClick={toggle}>
         <FileUp size={16} aria-hidden /> Export
       </button>
       {open && (
