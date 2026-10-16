@@ -4,3 +4,9 @@ compatibility_date = "2026-10-01"
 
 [assets]
 directory = "./dist"
+
+# The chart picture's font: a Worker has none of its own.
+[[rules]]
+type = "Data"
+globs = ["**/*.ttf"]
+fallthrough = true

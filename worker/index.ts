@@ -1,16 +1,27 @@
 import { docs_v1 } from '@googleapis/docs'
 import { sheets_v4 } from '@googleapis/sheets'
 import { createBackend, exactCredential, type BackendActionContext } from '@owox/plugin-sdk/server'
-import { docSection, sheetRow } from './google'
+import { CHART_PATH, CHART_WEEKS, chartLink, chartOf, chartSvg, chartWeeks, type ChartData } from './chart'
+import { docRequests, sheetCells, sheetRow, weekLink } from './google'
+import { png } from './png'
 import {
   checkWeek,
   firstDay,
   missingColumnsMessage,
+  placesOf,
   shiftDay,
   type Check,
   type SumRow,
   type Watch,
 } from './watch'
+
+type Env = {
+  /** Signs chart links; set with `npx wrangler secret put CHART_KEY`. Without it a Doc gets no chart. */
+  CHART_KEY?: string
+}
+
+/** Where an action's links lead: this Worker for a chart, OWOX for the plugin's pages. */
+type Links = { worker: string; owox: string | null; chartKey: string | null }
 
 const failure = (code: string, message: string) => Object.assign(new Error(message), { code })
 
@@ -70,7 +81,33 @@ async function savedCheck(ctx: BackendActionContext, checkId: string) {
   return saved.document
 }
 
-export default createBackend({
+/** The chart of a check as the page draws it: the watch's last weeks up to the check's, the check highlighted. */
+async function chartOfCheck(ctx: BackendActionContext, check: Check, watch: Watch): Promise<ChartData> {
+  const history: Check[] = []
+  let cursor: string | null = null
+  do {
+    const page = await ctx.collections<Check>('checks').list({ limit: 100, ...(cursor ? { cursor } : {}) })
+    history.push(...page.items.map(item => item.document).filter(item => item.watchId === check.watchId && item.asOf <= check.asOf))
+    cursor = page.nextCursor
+  } while (cursor)
+  const recent = history.sort((a, b) => a.asOf.localeCompare(b.asOf)).slice(-CHART_WEEKS)
+  return {
+    format: watch.format,
+    places: placesOf(check, watch),
+    weeks: chartWeeks(recent, watch),
+    selected: recent.findIndex(item => item.asOf === check.asOf),
+  }
+}
+
+/** A link to a check's week in OWOX; the execution names the installation, not the plugin. */
+async function linkOf(links: Links, ctx: BackendActionContext, check: Check) {
+  if (!links.owox) return null
+  const installations = await ctx.owox.getJson<{ installationId: string; pluginId: string }[]>('/api/plugins/installations')
+  const pluginId = installations.find(item => item.installationId === ctx.execution.installationId)?.pluginId
+  return pluginId ? weekLink(links.owox, ctx.execution.projectId, pluginId, check) : null
+}
+
+const backend = (links: Links) => createBackend({
   actions: {
     /** Checks the last full week, and with `weeks` the weeks before it too, into the `checks` history. */
     'check-metric': async (input, ctx) => {
@@ -107,32 +144,61 @@ export default createBackend({
       return { checked: weeks }
     },
 
-    /** Appends a check at the end of a Google Doc shared with the service account. */
+    /**
+     * Appends a check at the end of a Google Doc shared with the service account: its text, its chart
+     * and a link back to the week. Docs fetches the chart from this Worker while the request runs.
+     */
     'export-check-to-doc': async (input, ctx) => {
       const { checkId, documentId } = input as { checkId: string; documentId: string }
       const check = await savedCheck(ctx, checkId)
+      const watch = (await ctx.collections<Watch>('watches').get(check.watchId))?.document
       const docs = new docs_v1.Docs(googleOptions(ctx))
+      const chart = watch && links.chartKey ? await chartLink(links.worker, await chartOfCheck(ctx, check, watch), links.chartKey) : null
+      const { data } = await docs.documents.get({ documentId, fields: 'body(content(endIndex))' })
+      const end = data.body?.content?.at(-1)?.endIndex ?? 1
       await docs.documents.batchUpdate({
         documentId,
-        requestBody: { requests: [{ insertText: { endOfSegmentLocation: {}, text: docSection(check) } }] },
+        requestBody: { requests: docRequests(end - 1, check, chart, await linkOf(links, ctx, check)) },
       })
       return { documentId }
     },
 
-    /** Appends a check as one row of a Google Sheet shared with the service account. */
+    /** Appends a check as one row of the first sheet of a Google Sheet shared with the service account. */
     'export-check-to-sheet': async (input, ctx) => {
       const { checkId, spreadsheetId } = input as { checkId: string; spreadsheetId: string }
       const check = await savedCheck(ctx, checkId)
       // The watch sets the value's decimal places and what the week means now.
       const watch = await ctx.collections<Watch>('watches').get(check.watchId)
       const sheets = new sheets_v4.Sheets(googleOptions(ctx))
-      await sheets.spreadsheets.values.append({
+      const { data } = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(sheetId))' })
+      // Cells rather than values: only a cell can show a link under its own words.
+      const row = sheetCells(sheetRow(check, watch?.document), await linkOf(links, ctx, check))
+      await sheets.spreadsheets.batchUpdate({
         spreadsheetId,
-        range: 'A1',
-        valueInputOption: 'RAW',
-        requestBody: { values: [sheetRow(check, watch?.document)] },
+        requestBody: {
+          requests: [{ appendCells: { sheetId: data.sheets?.[0]?.properties?.sheetId ?? 0, rows: [{ values: row }], fields: 'userEnteredValue,textFormatRuns' } }],
+        },
       })
       return { spreadsheetId }
     },
   },
 })
+
+/** A chart link's picture; 404 for a link this Worker did not sign or one that has expired. */
+async function chartImage(url: URL, env: Env) {
+  const data = env.CHART_KEY ? await chartOf(url, env.CHART_KEY) : null
+  const svg = data && chartSvg(data)
+  if (!svg) return new Response('Not found', { status: 404 })
+  return new Response(new Uint8Array(await png(svg)), { headers: { 'content-type': 'image/png', 'cache-control': 'private, max-age=600' } })
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url)
+    if (request.method === 'GET' && url.pathname === CHART_PATH) return chartImage(url, env)
+    // createBackend runs no action until the host named in the call accepts its token, so links may use it.
+    const call = (await request.clone().json().catch(() => null)) as { host?: unknown } | null
+    const owox = typeof call?.host === 'string' ? call.host : null
+    return backend({ worker: url.origin, owox, chartKey: env.CHART_KEY ?? null }).fetch(request)
+  },
+}

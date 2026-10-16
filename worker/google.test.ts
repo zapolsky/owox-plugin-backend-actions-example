@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { exportTarget, sheetRow } from './google.ts'
+import { docRequests, exportTarget, LINK_TEXT, sheetCells, sheetRow, weekLink } from './google.ts'
 import type { Check, Watch } from './watch.ts'
 
 test('a Doc link exports to the Doc and a Sheet link to the Sheet', () => {
@@ -42,4 +42,42 @@ test('a Sheet row says what the week means for the watch now', () => {
   assert.equal(row[0], 'ROAS')
   assert.equal(row[5], 'Above usual')
   assert.equal(sheetRow(check, undefined)[5], 'Alert')
+})
+
+test('a Sheet row keeps its values as they are and ends with a link under words', () => {
+  const cells = sheetCells(['ROAS', '2026-10-08', 1.99, null], 'https://app.owox.com/w')
+  assert.deepEqual(cells.slice(0, 4), [
+    { userEnteredValue: { stringValue: 'ROAS' } },
+    { userEnteredValue: { stringValue: '2026-10-08' } },
+    { userEnteredValue: { numberValue: 1.99 } },
+    {},
+  ])
+  assert.deepEqual(cells[4], {
+    userEnteredValue: { stringValue: LINK_TEXT },
+    textFormatRuns: [{ startIndex: 0, format: { link: { uri: 'https://app.owox.com/w' } } }],
+  })
+  assert.equal(sheetCells(['ROAS'], null).length, 1)
+})
+
+test('a week links to the plugin page that shows it', () => {
+  assert.equal(
+    weekLink('https://app.owox.com', 'p1', 'plug 1', { watchId: 'w/1', asOf: '2026-10-15' }),
+    'https://app.owox.com/ui/p1/plugins/plug%201/open/watches/w%2F1/weeks/2026-10-15',
+  )
+})
+
+test('a Doc gets the text, then the chart, then the link, each at the index the one before left', () => {
+  const check = { text: 'ROAS, 8–14 Oct 2026: 1.99' } as Check
+  const text = `\n${check.text}\n`
+  const requests = docRequests(40, check, 'https://plugin.example/chart.png?d=1', 'https://app.owox.com/w')
+  assert.deepEqual(requests.map(request => Object.keys(request)[0]), ['insertText', 'updateTextStyle', 'insertInlineImage', 'insertText', 'updateTextStyle'])
+  assert.equal(requests[2].insertInlineImage?.location?.index, 40 + text.length)
+  assert.equal(requests[3].insertText?.location?.index, 40 + text.length + 1)
+  assert.equal(requests[3].insertText?.text, `\n${LINK_TEXT}`)
+  assert.deepEqual(requests[4].updateTextStyle?.range, { startIndex: 40 + text.length + 2, endIndex: 40 + text.length + 2 + LINK_TEXT.length })
+
+  const linkOnly = docRequests(40, check, null, 'https://app.owox.com/w')
+  assert.equal(linkOnly[2].insertText?.text, LINK_TEXT)
+  assert.deepEqual(linkOnly[3].updateTextStyle?.range, { startIndex: 40 + text.length, endIndex: 40 + text.length + LINK_TEXT.length })
+  assert.equal(docRequests(40, check, null, null).length, 2)
 })

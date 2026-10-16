@@ -17,12 +17,7 @@ import {
   type Watch,
   type Week,
 } from '../worker/watch'
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const shortDay = (day: string) => {
-  const date = new Date(`${day}T00:00:00Z`)
-  return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]}`
-}
+import { chartLayout, chartWeeks, shortDay } from '../worker/chart'
 
 /** `15 Oct, 16:29` in the member's time zone. */
 export function CheckedAt({ iso }: { iso: string }) {
@@ -83,16 +78,6 @@ function useWidth() {
   return [ref, width] as const
 }
 
-/** Steps of 1, 2, 2.5 or 5 times a power of ten, about four of them between `min` and `max`. */
-function ticks(min: number, max: number): number[] {
-  const raw = (max - min) / 4
-  const power = 10 ** Math.floor(Math.log10(raw))
-  const step = [1, 2, 2.5, 5, 10].map(multiple => multiple * power).find(candidate => candidate >= raw)!
-  const values: number[] = []
-  for (let value = Math.ceil(min / step) * step; value <= max; value += step) values.push(value)
-  return values
-}
-
 const CHART_HEIGHT = 260
 
 /**
@@ -113,26 +98,10 @@ export function HistoryChart({
   const [ref, width] = useWidth()
   const [hover, setHover] = useState<number | null>(null)
   const places = placesOf(selected, watch)
-  // A change rule ignores the usual range, so the chart does not draw it.
-  const usualOf = (check: Check) => (watch.rule.kind === 'unusual' ? check.usual : null)
-  const bounds = checks.flatMap(check => [
-    ...(check.value === null ? [] : [check.value]),
-    ...(usualOf(check) ? [usualOf(check)!.low, usualOf(check)!.high] : []),
-  ])
-  if (bounds.length === 0) return null
-
-  const pad = (Math.max(...bounds) - Math.min(...bounds)) * 0.1 || Math.abs(bounds[0]) * 0.1 || 1
-  const [min, max] = [Math.min(...bounds) - pad, Math.max(...bounds) + pad]
-  const scale = ticks(min, max)
-  const labels = scale.map(tick => formatMetric(tick, watch, places))
-  const [top, right, bottom, left] = [12, 8, CHART_HEIGHT - 28, 16 + Math.max(...labels.map(label => label.length)) * 7]
-  const column = (width - left - right) / checks.length
-  const x = (i: number) => left + (i + 0.5) * column
-  const y = (value: number) => bottom - ((value - min) / (max - min)) * (bottom - top)
-  const points = checks.flatMap((check, i) => (check.value === null ? [] : [{ i, value: check.value, tone: verdict(check, watch).tone }]))
   const at = checks.indexOf(selected)
-  // Dates do not fit in narrow columns: keep every other one, ending on the newest week.
-  const every = column < 56 ? 2 : 1
+  const layout = chartLayout({ format: watch.format, places, weeks: chartWeeks(checks, watch), selected: at }, width, CHART_HEIGHT)
+  if (!layout) return null
+  const { top, right, bottom, left, column, x, y, scale, points } = layout
 
   const indexAt = (event: MouseEvent<SVGSVGElement>) => {
     const offset = event.clientX - event.currentTarget.getBoundingClientRect().left
@@ -154,7 +123,7 @@ export function HistoryChart({
         >
           {at >= 0 && <rect className="selected" x={left + at * column} width={column} y={top - 6} height={bottom - top + 12} rx="6" />}
           {checks.map((check, i) => {
-            const usual = usualOf(check)
+            const usual = watch.rule.kind === 'unusual' ? check.usual : null
             return usual ? (
               <rect
                 key={`usual-${check.asOf}`}
@@ -166,16 +135,16 @@ export function HistoryChart({
               />
             ) : null
           })}
-          {scale.map((tick, i) => (
-            <g key={tick}>
-              <line className="grid" x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} />
-              <text className="tick" x={left - 8} y={y(tick)} dy="0.32em" textAnchor="end">
-                {labels[i]}
+          {scale.map(tick => (
+            <g key={tick.value}>
+              <line className="grid" x1={left} x2={width - right} y1={y(tick.value)} y2={y(tick.value)} />
+              <text className="tick" x={left - 8} y={y(tick.value)} dy="0.32em" textAnchor="end">
+                {tick.label}
               </text>
             </g>
           ))}
           {checks.map((check, i) =>
-            (checks.length - 1 - i) % every === 0 ? (
+            layout.dated(i) ? (
               <text key={check.asOf} className={i === at ? 'tick current' : 'tick'} x={x(i)} y={CHART_HEIGHT - 6} textAnchor="middle">
                 {shortDay(check.from)}
               </text>

@@ -15,6 +15,7 @@
     "@googleapis/sheets": "18.0.1",
     "@owox/api-client": "file:vendor/owox-api-client-0.38.0.tgz",
     "@owox/plugin-sdk": "file:vendor/owox-plugin-sdk-0.38.0.tgz",
+    "@resvg/resvg-wasm": "2.6.2",
     "lucide-react": "1.49.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

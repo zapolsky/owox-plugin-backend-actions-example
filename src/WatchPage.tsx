@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, Ellipsis, FileUp, LoaderCircle, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { CHART_WEEKS } from '../worker/chart'
 import { exportTarget } from '../worker/google'
 import { formatRange, verdict, type Check, type Watch } from '../worker/watch'
 import { HistoryChart, WeekKpi, WeekStrip, WhatHappened, WhyItChanged } from './CheckView'
 
 /** Weeks the chart and the strip show, the newest last. */
-const SHOWN_WEEKS = 12
 
 const formula = (watch: Watch) => (watch.denominator ? `${watch.numerator} ÷ ${watch.denominator}` : `sum of ${watch.numerator}`)
 
@@ -200,7 +200,7 @@ export function WatchPage({
   onExport: (checkId: string, link: string) => Promise<string>
 }) {
   const selected = history.find(check => check.asOf === asOf) ?? history[0]
-  const recent = history.slice(0, SHOWN_WEEKS).reverse()
+  const recent = history.slice(0, CHART_WEEKS).reverse()
   const alerts = watch ? recent.filter(check => verdict(check, watch).tone === 'bad').length : 0
 
   return (
