@@ -20,8 +20,8 @@ type Env = {
   CHART_KEY?: string
 }
 
-/** Where an action's links lead: this Worker for a chart, OWOX for the plugin's pages. */
-type Links = { worker: string; owox: string | null; chartKey: string | null }
+/** What a chart link needs: this Worker's origin and the key that signs it. */
+type Charts = { worker: string; key: string | null }
 
 const failure = (code: string, message: string) => Object.assign(new Error(message), { code })
 
@@ -99,15 +99,13 @@ async function chartOfCheck(ctx: BackendActionContext, check: Check, watch: Watc
   }
 }
 
-/** A link to a check's week in OWOX; the execution names the installation, not the plugin. */
-async function linkOf(links: Links, ctx: BackendActionContext, check: Check) {
-  if (!links.owox) return null
-  const installations = await ctx.owox.getJson<{ installationId: string; pluginId: string }[]>('/api/plugins/installations')
-  const pluginId = installations.find(item => item.installationId === ctx.execution.installationId)?.pluginId
-  return pluginId ? weekLink(links.owox, ctx.execution.projectId, pluginId, check) : null
-}
+/** A link to a check's week on the plugin's page in OWOX. */
+const linkOf = (ctx: BackendActionContext, check: Check) =>
+  weekLink(ctx.host, ctx.execution.projectId, ctx.execution.plugin.id, check)
 
-const backend = (links: Links) => createBackend({
+const backend = (charts: Charts) => createBackend({
+  // This repository on GitHub: OWOX runs nothing here for an execution of another plugin.
+  repositoryId: '1419740594',
   actions: {
     /** Checks the last full week, and with `weeks` the weeks before it too, into the `checks` history. */
     'check-metric': async (input, ctx) => {
@@ -153,12 +151,12 @@ const backend = (links: Links) => createBackend({
       const check = await savedCheck(ctx, checkId)
       const watch = (await ctx.collections<Watch>('watches').get(check.watchId))?.document
       const docs = new docs_v1.Docs(googleOptions(ctx))
-      const chart = watch && links.chartKey ? await chartLink(links.worker, await chartOfCheck(ctx, check, watch), links.chartKey) : null
+      const chart = watch && charts.key ? await chartLink(charts.worker, await chartOfCheck(ctx, check, watch), charts.key) : null
       const { data } = await docs.documents.get({ documentId, fields: 'body(content(endIndex))' })
       const end = data.body?.content?.at(-1)?.endIndex ?? 1
       await docs.documents.batchUpdate({
         documentId,
-        requestBody: { requests: docRequests(end - 1, check, chart, await linkOf(links, ctx, check)) },
+        requestBody: { requests: docRequests(end - 1, check, chart, linkOf(ctx, check)) },
       })
       return { documentId }
     },
@@ -172,7 +170,7 @@ const backend = (links: Links) => createBackend({
       const sheets = new sheets_v4.Sheets(googleOptions(ctx))
       const { data } = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(sheetId))' })
       // Cells rather than values: only a cell can show a link under its own words.
-      const row = sheetCells(sheetRow(check, watch?.document), await linkOf(links, ctx, check))
+      const row = sheetCells(sheetRow(check, watch?.document), linkOf(ctx, check))
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId,
         requestBody: {
@@ -196,9 +194,6 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
     if (request.method === 'GET' && url.pathname === CHART_PATH) return chartImage(url, env)
-    // createBackend runs no action until the host named in the call accepts its token, so links may use it.
-    const call = (await request.clone().json().catch(() => null)) as { host?: unknown } | null
-    const owox = typeof call?.host === 'string' ? call.host : null
-    return backend({ worker: url.origin, owox, chartKey: env.CHART_KEY ?? null }).fetch(request)
+    return backend({ worker: url.origin, key: env.CHART_KEY ?? null }).fetch(request)
   },
 }
