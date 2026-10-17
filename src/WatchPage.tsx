@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, Ellipsis, FileUp, LoaderCircle, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeft, CalendarClock, Ellipsis, FileUp, LoaderCircle, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import type { PluginSchedule } from '@owox/plugin-sdk'
 import { CHART_WEEKS } from '../worker/chart'
 import { exportTarget } from '../worker/google'
 import { formatRange, verdict, type Check, type Watch } from '../worker/watch'
-import { HistoryChart, WeekKpi, WeekStrip, WhatHappened, WhyItChanged } from './CheckView'
+import { CheckedAt, HistoryChart, WeekKpi, WeekStrip, WhatHappened, WhyItChanged } from './CheckView'
+
+export type ScheduleChange = 'create' | 'pause' | 'resume' | 'delete'
 
 /** Weeks the chart and the strip show, the newest last. */
 
@@ -117,6 +120,85 @@ function ExportMenu({ range, onExport }: { range: string; onExport: (link: strin
   )
 }
 
+const stoppedBecause: Record<NonNullable<PluginSchedule['disabledReason']>, string> = {
+  OWNER_NOT_MEMBER: 'the member who installed Metric Watch left the project',
+  ACTION_NOT_DECLARED: 'this version of Metric Watch no longer checks metrics',
+  INVALID_PARAMETERS: 'this version of Metric Watch no longer accepts this watch',
+}
+
+/** The watch's weekly check, which OWOX runs with the plugin closed. */
+function ScheduleMenu({ schedule, onChange }: { schedule: PluginSchedule | undefined; onChange: (change: ScheduleChange) => Promise<void> }) {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const close = () => setOpen(false)
+  const ref = useDismiss(open, close)
+  const change = (next: ScheduleChange) => {
+    setBusy(true)
+    void onChange(next).finally(() => setBusy(false))
+  }
+  const last = schedule?.lastRun
+
+  return (
+    <div className="menu-anchor" ref={ref}>
+      <button className="button secondary" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <CalendarClock size={16} aria-hidden /> {!schedule ? 'Schedule' : schedule.enabled ? 'Weekly' : schedule.disabledReason ? 'Stopped' : 'Paused'}
+      </button>
+      {open && (
+        <div className="popover" role="dialog" aria-label="Weekly check" onKeyDown={event => event.key === 'Escape' && close()}>
+          <strong>Weekly check</strong>
+          {schedule ? (
+            <>
+              <p className="dm-muted hint flush">
+                Every Monday at 09:00, {schedule.timeZone}.{' '}
+                {schedule.enabled && schedule.nextRunAt ? (
+                  <>
+                    Next check <CheckedAt iso={schedule.nextRunAt} />.
+                  </>
+                ) : schedule.disabledReason ? (
+                  `Stopped: ${stoppedBecause[schedule.disabledReason]}.`
+                ) : (
+                  'Paused.'
+                )}
+              </p>
+              {last && (
+                <p className="dm-muted hint flush">
+                  Last run {last.status.toLowerCase().replace('_', ' ')}
+                  {last.finishedAt && (
+                    <>
+                      {' '}
+                      <CheckedAt iso={last.finishedAt} />
+                    </>
+                  )}
+                  {last.errorCode && ` (${last.errorCode})`}.
+                </p>
+              )}
+              <div className="actions end">
+                <button className="button danger" onClick={() => change('delete')} disabled={busy}>
+                  Delete
+                </button>
+                <button className="button secondary" onClick={() => change(schedule.enabled ? 'pause' : 'resume')} disabled={busy}>
+                  {schedule.enabled ? 'Pause' : 'Resume'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="dm-muted hint flush">
+                Check the last week every Monday at 09:00, your time. The plugin can stay closed: the result is saved here.
+              </p>
+              <div className="actions end">
+                <button className="button" onClick={() => change('create')} disabled={busy}>
+                  {busy && <LoaderCircle className="spin" size={16} aria-hidden />} Check weekly
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Edit and Delete, behind one button; Delete asks once. */
 function MoreMenu({ name, weeks, onEdit, onDelete }: { name: string; weeks: number; onEdit: () => void; onDelete: () => void }) {
   const [open, setOpen] = useState(false)
@@ -184,6 +266,8 @@ export function WatchPage({
   onEdit,
   onDelete,
   onExport,
+  schedule,
+  onSchedule,
 }: {
   watchId: string
   watch: Watch | null
@@ -191,6 +275,9 @@ export function WatchPage({
   asOf: string | undefined
   running: boolean
   error: ReactNode
+  /** Undefined on a host without schedules. */
+  onSchedule: ((change: ScheduleChange) => Promise<void>) | undefined
+  schedule: PluginSchedule | undefined
   onBack: () => void
   onSelect: (asOf: string) => void
   onCheck: () => void
@@ -234,6 +321,7 @@ export function WatchPage({
               onExport={link => onExport(`${watchId}~${selected.asOf}`, link)}
             />
           )}
+          {watch && onSchedule && <ScheduleMenu schedule={schedule} onChange={onSchedule} />}
           {watch && <MoreMenu name={watch.name} weeks={history.length} onEdit={onEdit} onDelete={onDelete} />}
         </div>
       </header>

@@ -72,6 +72,8 @@ export type Check = {
   breakdowns: Breakdown[]
   text: string
   checkedAt: string
+  /** What started the check: the page, or the watch's weekly schedule. */
+  trigger?: 'frontend' | 'schedule'
 }
 
 const DAY_MS = 86_400_000

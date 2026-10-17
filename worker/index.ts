@@ -137,7 +137,7 @@ const backend = (charts: Charts) => createBackend({
       const history = ctx.collections<Check>('checks')
       for (let week = 0; week < weeks; week++) {
         const check = checkWeek(watchId, watch, shiftDay(asOf, -7 * week), totals, byDimension, checkedAt)
-        await history.put(`${watchId}~${check.asOf}`, check)
+        await history.put(`${watchId}~${check.asOf}`, { ...check, trigger: ctx.execution.trigger })
       }
       return { checked: weeks }
     },

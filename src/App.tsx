@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, ArrowLeft, Plus } from 'lucide-react'
-import type { PluginCollection, PluginCollectionDocument, PluginContext } from '@owox/plugin-sdk'
+import type { PluginCollection, PluginCollectionDocument, PluginContext, PluginSchedule } from '@owox/plugin-sdk'
 import { exportTarget } from '../worker/google'
 import { formatRange, verdict, type Check, type Watch } from '../worker/watch'
 import { CheckedAt } from './CheckView'
 import { WatchCard } from './WatchCard'
 import { WatchForm, type DataMartOption } from './WatchForm'
-import { WatchPage } from './WatchPage'
+import { WatchPage, type ScheduleChange } from './WatchPage'
 
 type Saved<T> = PluginCollectionDocument<T>
 
@@ -68,11 +68,16 @@ export default function App({ ctx }: { ctx: PluginContext }) {
   const [dataMarts, setDataMarts] = useState<DataMartOption[] | null>(null)
   const [watches, setWatches] = useState<Saved<StoredWatch>[] | null>(null)
   const [checks, setChecks] = useState<Saved<Check>[]>([])
+  const [schedules, setSchedules] = useState<PluginSchedule[]>([])
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const actions = ctx.actions
   const watchStore = ctx.collections<StoredWatch>('watches')
   const checkStore = ctx.collections<Check>('checks')
+
+  /** A watch's weekly check: the schedule that starts `check-metric` for it. */
+  const scheduleOf = (watchId: string) =>
+    schedules.find(item => item.action === 'check-metric' && (item.parameters as { watchId?: unknown } | null)?.watchId === watchId)
 
   const go = (next: Route) => {
     setRoute(next)
@@ -81,10 +86,11 @@ export default function App({ ctx }: { ctx: PluginContext }) {
   }
 
   const reload = () =>
-    Promise.all([listAll(watchStore), listAll(checkStore)]).then(
-      ([savedWatches, savedChecks]) => {
+    Promise.all([listAll(watchStore), listAll(checkStore), ctx.schedules?.list() ?? []]).then(
+      ([savedWatches, savedChecks, savedSchedules]) => {
         setWatches(savedWatches.sort((a, b) => a.createdAt.localeCompare(b.createdAt)))
         setChecks(savedChecks)
+        setSchedules(savedSchedules)
       },
       (failure: unknown) => setError(errorMessage(failure)),
     )
@@ -166,7 +172,29 @@ export default function App({ ctx }: { ctx: PluginContext }) {
     if (recheck) await check(id, watch, 12)
   }
 
+  /** Creates, pauses, resumes or deletes a watch's weekly check. */
+  const changeSchedule = async (watchId: string, watch: Watch, change: ScheduleChange) => {
+    const store = ctx.schedules
+    if (!store) return
+    const schedule = scheduleOf(watchId)
+    if (change === 'create') {
+      await store.create({
+        action: 'check-metric',
+        parameters: { watchId },
+        cron: '0 9 * * 1',
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        name: `Weekly check of ${watch.name}`.slice(0, 200),
+      })
+    } else if (schedule) {
+      await (change === 'delete' ? store.delete(schedule.id) : store[change](schedule.id))
+    }
+    await reload()
+  }
+
   const remove = async (watchId: string, run: Run | undefined) => {
+    // First, so a failure leaves the watch and its weekly check as they were.
+    const schedule = scheduleOf(watchId)
+    if (schedule) await ctx.schedules?.delete(schedule.id)
     if (run) await actions.cancel(run.executionId).catch(() => undefined)
     await Promise.all(
       checks.filter(saved => saved.document.watchId === watchId).map(saved => checkStore.delete(saved.id)),
@@ -255,6 +283,14 @@ export default function App({ ctx }: { ctx: PluginContext }) {
         onEdit={() => go({ page: 'edit', watchId: route.watchId })}
         onDelete={() => void remove(route.watchId, run).catch((failure: unknown) => setError(errorMessage(failure)))}
         onExport={exportCheck}
+        schedule={scheduleOf(route.watchId)}
+        onSchedule={
+          ctx.schedules &&
+          (change =>
+            saved
+              ? changeSchedule(saved.id, saved.document, change).catch((failure: unknown) => setError(errorMessage(failure)))
+              : Promise.resolve())
+        }
       />
     )
   }

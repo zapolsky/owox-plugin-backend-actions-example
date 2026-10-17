@@ -400,6 +400,7 @@ export function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
       )}
       <p className="dm-muted hint">
         Checked <CheckedAt iso={check.checkedAt} />
+        {check.trigger === 'schedule' && ' by the weekly schedule'}
       </p>
     </section>
   )

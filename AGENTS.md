@@ -6,7 +6,9 @@ that explain it, such as channel, campaign and country, how its value reads and 
 good or bad. The page starts `check-metric`; the Worker
 reads daily sums through HTTP Data, compares the last full week with the eight weeks before,
 splits the change between the values of each column and saves one check per week to the `checks`
-collection. A check started before the plugin closed is there when it reopens. With an optional
+collection. A check started before the plugin closed is there when it reopens. On a host with
+schedules, a watch can be checked every Monday at 09:00 in the member's time zone with the plugin
+closed; a check records whether the page or the schedule started it. With an optional
 Google Service Account Credential, `export-check-to-doc` and `export-check-to-sheet` append a
 check to a Google Doc or Sheet with a link back to its week; OWOX adds the access token, so the
 key never reaches the Worker. The Doc also gets the week's chart: the Worker draws it as a PNG at a
@@ -16,7 +18,8 @@ at `/chart.png`.
 
 - `src/`: the plugin page (Vite and React) on the authoring guide's UI foundation in
   `styles.css`, with Lucide icons. It saves watches through `ctx.collections`, starts checks
-  through `ctx.actions` and keeps a running check in the plugin route.
+  through `ctx.actions`, keeps a running check in the plugin route and keeps each watch's weekly
+  check in `ctx.schedules`.
 - `worker/index.ts`: the actions, built with `createBackend` from `@owox/plugin-sdk/server`.
 - `worker/google.ts`: the export target of a Doc or Sheet link and what a check adds there;
   `worker/google.test.ts` tests the link.
