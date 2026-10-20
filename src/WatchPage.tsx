@@ -2,12 +2,12 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, CalendarClock, Ellipsis, FileUp, LoaderCircle, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import type { PluginSchedule } from '@owox/plugin-sdk'
 import { CHART_PERIODS } from '../worker/chart'
-import { exportTarget } from '../worker/google'
+import { exportLink, exportTarget } from '../worker/google'
 import { ADVERB, count, FIRST_CHECK, granularityOf, periodLabel, SCHEDULES, type Granularity } from '../worker/period'
 import { verdict, type Check, type Watch } from '../worker/watch'
 import { CheckedAt, HistoryChart, WeekKpi, WeekStrip, WhatHappened, WhyItChanged } from './CheckView'
 
-export type ScheduleChange = 'create' | 'pause' | 'resume' | 'delete'
+export type ScheduleChange = 'create' | 'pause' | 'resume' | 'delete' | 'target'
 
 const formula = (watch: Watch) => (watch.denominator ? `${watch.numerator} ÷ ${watch.denominator}` : `sum of ${watch.numerator}`)
 
@@ -134,20 +134,43 @@ function ScheduleMenu({
 }: {
   schedule: PluginSchedule | undefined
   granularity: Granularity
-  onChange: (change: ScheduleChange) => Promise<void> }) {
+  onChange: (change: ScheduleChange, link: string) => Promise<void> }) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const saved = exportLink(schedule?.parameters)
+  const [link, setLink] = useState(saved)
   const close = () => setOpen(false)
+  // Each opening shows the saved target, so an unsaved edit is not mistaken for it.
+  const toggle = () => {
+    if (!open) setLink(saved)
+    setOpen(!open)
+  }
   const ref = useDismiss(open, close)
+  const target = exportTarget(link)
+  const invalid = link.trim() !== '' && !target
+  const changed = !invalid && (target ? exportLink(target.input) : '') !== saved
   const change = (next: ScheduleChange) => {
     setBusy(true)
-    void onChange(next).finally(() => setBusy(false))
+    void onChange(next, target ? link : '').finally(() => setBusy(false))
   }
+  const exportField = (
+    <>
+      <label className="field">
+        Also add each check to
+        <input type="url" value={link} onChange={event => setLink(event.target.value)} placeholder="Google Doc or Sheet link (optional)" />
+      </label>
+      <p role={invalid ? 'alert' : undefined} className={invalid ? 'alert' : 'dm-muted hint flush'}>
+        {invalid
+          ? 'Paste the link of a Google Doc or Sheet.'
+          : "A Doc gets each check at its end, a Sheet as a row. Share it with the plugin's service account first."}
+      </p>
+    </>
+  )
   const last = schedule?.lastRun
 
   return (
     <div className="menu-anchor" ref={ref}>
-      <button className="button secondary" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button className="button secondary" aria-expanded={open} onClick={toggle}>
         <CalendarClock size={16} aria-hidden /> {!schedule ? 'Schedule' : schedule.enabled ? ADVERB[granularity] : schedule.disabledReason ? 'Stopped' : 'Paused'}
       </button>
       {open && (
@@ -179,12 +202,16 @@ function ScheduleMenu({
                   {last.errorCode && ` (${last.errorCode})`}.
                 </p>
               )}
+              {exportField}
               <div className="actions end">
                 <button className="button danger" onClick={() => change('delete')} disabled={busy}>
                   Delete
                 </button>
                 <button className="button secondary" onClick={() => change(schedule.enabled ? 'pause' : 'resume')} disabled={busy}>
                   {schedule.enabled ? 'Pause' : 'Resume'}
+                </button>
+                <button className="button" onClick={() => change('target')} disabled={busy || !changed}>
+                  Save
                 </button>
               </div>
             </>
@@ -193,8 +220,9 @@ function ScheduleMenu({
               <p className="dm-muted hint flush">
                 {SCHEDULES[granularity].when}, your time, check the last {granularity}. The plugin can stay closed: the result is saved here.
               </p>
+              {exportField}
               <div className="actions end">
-                <button className="button" onClick={() => change('create')} disabled={busy}>
+                <button className="button" onClick={() => change('create')} disabled={busy || invalid}>
                   {busy && <LoaderCircle className="spin" size={16} aria-hidden />} Check {ADVERB[granularity].toLowerCase()}
                 </button>
               </div>
@@ -293,7 +321,7 @@ export function WatchPage({
   running: boolean
   error: ReactNode
   /** Undefined on a host without schedules. */
-  onSchedule: ((change: ScheduleChange) => Promise<void>) | undefined
+  onSchedule: ((change: ScheduleChange, link: string) => Promise<void>) | undefined
   schedule: PluginSchedule | undefined
   onBack: () => void
   onSelect: (asOf: string) => void

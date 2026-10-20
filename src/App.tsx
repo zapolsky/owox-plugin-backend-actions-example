@@ -183,16 +183,25 @@ export default function App({ ctx }: { ctx: PluginContext }) {
     if (recheck) await check(id, watch, FIRST_CHECK[granularityOf(watch)])
   }
 
-  /** Creates, pauses, resumes or deletes a watch's scheduled check. */
-  const changeSchedule = async (watchId: string, watch: Watch, change: ScheduleChange) => {
+  /** Creates, pauses, resumes or deletes a watch's scheduled check, or changes where it adds each check. */
+  const changeSchedule = async (watchId: string, watch: Watch, change: ScheduleChange, link: string) => {
     const store = ctx.schedules
     if (!store) return
     const schedule = scheduleOf(watchId)
+    const target = exportTarget(link)?.input ?? {}
     if (change === 'create') {
       const zone = timeZone()
-      await store.create({ action: 'check-metric', parameters: { watchId, timeZone: zone }, timeZone: zone, ...scheduleFor(watch) })
+      await store.create({ action: 'check-metric', parameters: { watchId, timeZone: zone, ...target }, timeZone: zone, ...scheduleFor(watch) })
     } else if (schedule) {
-      await (change === 'delete' ? store.delete(schedule.id) : store[change](schedule.id))
+      if (change === 'target') {
+        // The rest of the parameters stay: a schedule made before periods keeps checking by UTC.
+        const { documentId: _doc, spreadsheetId: _sheet, ...kept } = (schedule.parameters ?? {}) as Record<string, unknown>
+        await store.update(schedule.id, { parameters: { ...kept, ...target } })
+      } else if (change === 'delete') {
+        await store.delete(schedule.id)
+      } else {
+        await store[change](schedule.id)
+      }
     }
     await reload()
   }
@@ -292,9 +301,9 @@ export default function App({ ctx }: { ctx: PluginContext }) {
         schedule={scheduleOf(route.watchId)}
         onSchedule={
           ctx.schedules &&
-          (change =>
+          ((change, link) =>
             saved
-              ? changeSchedule(saved.id, saved.document, change).catch((failure: unknown) => setError(errorMessage(failure)))
+              ? changeSchedule(saved.id, saved.document, change, link).catch((failure: unknown) => setError(errorMessage(failure)))
               : Promise.resolve())
         }
       />
