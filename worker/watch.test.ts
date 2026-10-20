@@ -2,27 +2,25 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   breakdown,
-  checkWeek,
+  checkPeriod,
   DEVIATIONS,
   driverChanges,
   drivers,
   explain,
-  firstDay,
   formatDelta,
   formatMetric,
   leadDriver,
   shareOf,
   placesFor,
-  shiftDay,
   signed,
   standing,
   usualRange,
   verdict,
-  weekAt,
   type Check,
   type SumRow,
   type Watch,
 } from './watch.ts'
+import { periodAt, shiftDay, shiftPeriod } from './period.ts'
 
 const asOf = '2026-10-15'
 
@@ -51,20 +49,12 @@ function days(
 
 const totals = (rows: SumRow[]) => rows.map(({ segment: _segment, ...row }) => row)
 
-test('weeks end the day before the check and step back seven days', () => {
-  assert.deepEqual(weekAt(asOf, 0), { from: '2026-10-08', to: '2026-10-14' })
-  assert.deepEqual(weekAt(asOf, 1), { from: '2026-10-01', to: '2026-10-07' })
-  // One check reads its week and the eight before it; twelve checks reach eleven weeks further.
-  assert.equal(firstDay(asOf, 1), '2026-08-13')
-  assert.equal(firstDay(asOf, 12), shiftDay('2026-08-13', -77))
-})
-
 test('the parts of a ratio change add up to the change and blame the value that moved', () => {
   // facebook doubles its cost this week and brings no more revenue.
   const rows = days((row, ago) =>
     ago <= 7 && row.segment === 'facebook / paid' ? { ...row, denominator: 200 } : row,
   )
-  const segments = breakdown(rows, weekAt(asOf, 0), weekAt(asOf, 1), true)
+  const segments = breakdown(rows, periodAt('week', asOf, 0), periodAt('week', asOf, 1), true)
   const sum = segments.reduce((all, segment) => all + segment.contribution, 0)
   // ROAS was 1200 / 400 = 3, now 1200 / 600 = 2.
   assert.ok(Math.abs(sum - (2 - 3)) < 1e-12)
@@ -83,7 +73,7 @@ test('a value that did not change gets no part of a ratio change', () => {
         : ago <= 7 ? { ...row, denominator: 200 } : row,
     ['facebook / paid', 'email'],
   )
-  const segments = breakdown(rows, weekAt(asOf, 0), weekAt(asOf, 1), true)
+  const segments = breakdown(rows, periodAt('week', asOf, 0), periodAt('week', asOf, 1), true)
   const email = segments.find(segment => segment.name === 'email')
   assert.equal(email?.contribution, 0)
   assert.ok(Math.abs(segments.reduce((all, segment) => all + segment.contribution, 0) - (1800 / 300 - 9)) < 1e-12)
@@ -116,7 +106,7 @@ test('a small ratio keeps three significant digits and a small change names no d
   // Orders per session: 3 of 120 a day, then 2.9 of 120 this week, about 3% less.
   const rate: Watch = { ...roas, name: 'Conversion rate', numerator: 'orders', denominator: 'sessions' }
   const rows = days((row, ago) => ({ ...row, numerator: ago <= 7 ? 2.9 : 3, denominator: 120 }))
-  const check = checkWeek('w1', rate, asOf, totals(rows), { channel: rows }, '')
+  const check = checkPeriod('w1', rate, asOf, totals(rows), { channel: rows }, '')
   assert.equal(check.text, 'Conversion rate, 8–14 Oct 2026: fell 3% to 0.0242 (0.0250 the week before).')
 })
 
@@ -125,7 +115,7 @@ test('a sum splits by each value and folds the long tail into Other without losi
     { day: '2026-10-10', segment: `c${i}`, numerator: 10 + i, denominator: 0 },
     { day: '2026-10-03', segment: `c${i}`, numerator: 10, denominator: 0 },
   ]).flat()
-  const segments = breakdown(rows, weekAt(asOf, 0), weekAt(asOf, 1), false)
+  const segments = breakdown(rows, periodAt('week', asOf, 0), periodAt('week', asOf, 1), false)
   assert.equal(segments.length, 7)
   assert.equal(segments[0].name, 'c9')
   assert.equal(segments[0].contribution, 9)
@@ -144,7 +134,7 @@ test('a week below the usual range alerts and names what drove it', () => {
   const rows = days((row, ago) =>
     ago <= 7 && row.segment === 'facebook / paid' ? { ...row, denominator: 250 } : row,
   )
-  const check = checkWeek('w1', roas, asOf, totals(rows), { channel: rows }, '2026-10-15T09:00:00Z')
+  const check = checkPeriod('w1', roas, asOf, totals(rows), { channel: rows }, '2026-10-15T09:00:00Z')
   assert.equal(check.from, '2026-10-08')
   assert.equal(check.weeks.length, 9)
   assert.equal(check.value, 600 * 7 / (350 * 7))
@@ -163,7 +153,7 @@ test('a week below the usual range alerts and names what drove it', () => {
 test('a change no single value explains says so and names the largest part', () => {
   // Both channels lose a little revenue, so each explains half of the drop.
   const rows = days((row, ago) => (ago <= 7 ? { ...row, numerator: 240 } : row))
-  const check = checkWeek('w1', roas, asOf, totals(rows), { channel: rows }, '')
+  const check = checkPeriod('w1', roas, asOf, totals(rows), { channel: rows }, '')
   assert.match(check.text, /Driven by channel "(facebook \/ paid|google \/ cpc)" \(50%\)\./)
   // Three channels lose 60, 50 and 40 a day: the largest explains 40% of the drop.
   const loss: Record<string, number> = { email: 240, tiktok: 250, bing: 260 }
@@ -171,7 +161,7 @@ test('a change no single value explains says so and names the largest part', () 
     (row, ago) => (ago <= 7 ? { ...row, numerator: loss[row.segment!] } : row),
     Object.keys(loss),
   )
-  const unclear = checkWeek('w1', roas, asOf, totals(spread), { channel: spread }, '')
+  const unclear = checkPeriod('w1', roas, asOf, totals(spread), { channel: spread }, '')
   assert.match(unclear.text, /No single value explains most of it; the largest is channel "email" \(40%\)\. In "email", cost 0%, revenue −20%\.$/)
 })
 
@@ -179,15 +169,15 @@ test('rows split by more columns than one give the same check', () => {
   // One Data Mart run returns a row per day and combination of every dimension; each split sums them.
   const rows = days((row, ago) => (ago <= 7 && row.segment === 'facebook / paid' ? { ...row, denominator: 250 } : row))
   const split = rows.flatMap(row => ['US', 'PL'].map(() => ({ ...row, numerator: row.numerator / 2, denominator: row.denominator / 2 })))
-  const whole = checkWeek('w1', roas, asOf, totals(rows), { channel: rows }, '')
-  const halves = checkWeek('w1', roas, asOf, totals(split), { channel: split }, '')
+  const whole = checkPeriod('w1', roas, asOf, totals(rows), { channel: rows }, '')
+  const halves = checkPeriod('w1', roas, asOf, totals(split), { channel: split }, '')
   assert.equal(halves.text, whole.text)
   assert.deepEqual(halves.weeks, whole.weeks)
 })
 
 test('an ordinary week does not alert', () => {
   const rows = days()
-  const check = checkWeek('w1', roas, asOf, totals(rows), { channel: rows }, '2026-10-15T09:00:00Z')
+  const check = checkPeriod('w1', roas, asOf, totals(rows), { channel: rows }, '2026-10-15T09:00:00Z')
   assert.equal(check.alert, false)
   assert.equal(check.change, 0)
   assert.match(check.text, /held at 3\.00/)
@@ -196,10 +186,10 @@ test('an ordinary week does not alert', () => {
 test('a change rule alerts only in its direction', () => {
   const rows = days((row, ago) => (ago <= 7 ? { ...row, numerator: 400 } : row))
   const rising = { ...roas, rule: { kind: 'change', percent: 15, direction: 'down' } } satisfies Watch
-  const down = checkWeek('w1', rising, asOf, totals(rows), {}, '')
+  const down = checkPeriod('w1', rising, asOf, totals(rows), {}, '')
   assert.equal(down.alert, false)
   assert.equal(down.reason, 'Rose 33%, within 15%.')
-  const either = checkWeek('w1', { ...rising, rule: { ...rising.rule, direction: 'any' } }, asOf, totals(rows), {}, '')
+  const either = checkPeriod('w1', { ...rising, rule: { ...rising.rule, direction: 'any' } }, asOf, totals(rows), {}, '')
   assert.equal(either.alert, true)
   assert.equal(either.reason, 'Rose 33%, past the 15% the rule allows.')
 })
@@ -207,20 +197,20 @@ test('a change rule alerts only in its direction', () => {
 test('weeks without rows have no value instead of zero and set no usual range', () => {
   const visits: Watch = { ...roas, name: 'visits', numerator: 'visits', denominator: null }
   // Data starts three weeks back: the five weeks before are empty, not zero.
-  const rows = days().filter(row => row.day >= weekAt(asOf, 2).from)
-  const check = checkWeek('w1', visits, asOf, totals(rows), { channel: rows }, '')
+  const rows = days().filter(row => row.day >= periodAt('week', asOf, 2).from)
+  const check = checkPeriod('w1', visits, asOf, totals(rows), { channel: rows }, '')
   assert.deepEqual(check.weeks.map(week => week.value), [null, null, null, null, null, null, 4200, 4200, 4200])
   assert.equal(check.usual, null)
   assert.equal(check.alert, false)
   assert.equal(check.reason, 'Needs four earlier weeks with data to know the usual range.')
-  const empty = checkWeek('w1', visits, shiftDay(asOf, 21), totals(rows), {}, '')
+  const empty = checkPeriod('w1', visits, shiftDay(asOf, 21), totals(rows), {}, '')
   assert.equal(empty.value, null)
   assert.equal(empty.reason, 'No data this week.')
 })
 
 test('a week with no cost has no ROAS and says so instead of dividing by zero', () => {
   const rows = days((row, ago) => (ago <= 7 ? { ...row, denominator: 0 } : row))
-  const check = checkWeek('w1', roas, asOf, totals(rows), { channel: rows }, '')
+  const check = checkPeriod('w1', roas, asOf, totals(rows), { channel: rows }, '')
   assert.equal(check.value, null)
   assert.equal(check.alert, false)
   assert.deepEqual(check.breakdowns, [{ dimension: 'channel', segments: [] }])
@@ -248,25 +238,25 @@ test('a higher sensitivity narrows the usual range', () => {
   assert.deepEqual(usualRange(weeks), medium)
   // A week at 3.45 is usual at the default, unusual when the member wants more alerts.
   const rows = days((row, ago) => (ago <= 7 ? { ...row, numerator: 345 } : row))
-  const usual = checkWeek('w1', roas, asOf, totals(rows), {}, '')
+  const usual = checkPeriod('w1', roas, asOf, totals(rows), {}, '')
   assert.match(usual.reason, /^Within the usual 2\.55–3\.45/)
-  const sensitive = checkWeek('w1', { ...roas, sensitivity: 'high' }, asOf, totals(rows), {}, '')
+  const sensitive = checkPeriod('w1', { ...roas, sensitivity: 'high' }, asOf, totals(rows), {}, '')
   assert.match(sensitive.reason, /^Above the usual 2\.70–3\.30/)
 })
 
 test('only the bad side of the usual range alerts', () => {
   const rows = days((row, ago) => (ago <= 7 ? { ...row, numerator: 600 } : row))
-  const better = checkWeek('w1', { ...roas, format: 'times' }, asOf, totals(rows), { channel: rows }, '')
+  const better = checkPeriod('w1', { ...roas, format: 'times' }, asOf, totals(rows), { channel: rows }, '')
   assert.equal(better.alert, false)
   assert.equal(better.reason, 'Above the usual 2.55×–3.45× of the eight weeks before, which is good news.')
   assert.deepEqual(verdict(better, roas), { tone: 'good', label: 'Above usual' })
   const cost: Watch = { ...roas, name: 'Ad spend', numerator: 'cost', denominator: null, rise: 'bad' }
   const spent = days((row, ago) => (ago <= 7 ? { ...row, denominator: 200, numerator: 200 } : row))
-  const check = checkWeek('w1', cost, asOf, totals(spent), {}, '')
+  const check = checkPeriod('w1', cost, asOf, totals(spent), {}, '')
   assert.equal(check.alert, false)
   assert.deepEqual(verdict(check, cost), { tone: 'good', label: 'Below usual' })
   const doubled = days((row, ago) => (ago <= 7 ? { ...row, numerator: 900 } : row))
-  const overspent = checkWeek('w1', cost, asOf, totals(doubled), {}, '')
+  const overspent = checkPeriod('w1', cost, asOf, totals(doubled), {}, '')
   assert.equal(overspent.alert, true)
   assert.deepEqual(verdict(overspent, cost), { tone: 'bad', label: 'Above usual' })
 })
@@ -344,4 +334,53 @@ test('where a week stands reads in the format and rule of its watch', () => {
   assert.equal(standing(week, { ...roas, rule }), 'Down 25% · limit 15%')
   assert.equal(standing({ ...week, alert: false }, { ...roas, rule }), 'Within 15% of the week before')
   assert.equal(standing({ ...week, usual: null, reason: 'Needs four earlier weeks.' }, roas), 'Needs four earlier weeks.')
+})
+
+test('a watch saved before periods checks a week', () => {
+  const rows = days()
+  const check = checkPeriod('w1', roas, asOf, totals(rows), { channel: rows }, '2026-10-15T06:00:00.000Z')
+  assert.equal(check.granularity, 'week')
+  assert.deepEqual([check.from, check.to], ['2026-10-08', '2026-10-14'])
+  assert.match(check.text, /the week before/)
+})
+
+test('a day watch compares a day with the day before and the eight days before it', () => {
+  const watch: Watch = { ...roas, granularity: 'day' }
+  const rows: SumRow[] = Array.from({ length: 20 }, (_, i) => shiftDay('2026-10-20', -(i + 1))).map(day => ({
+    day,
+    segment: 'google / cpc',
+    numerator: 300,
+    denominator: day === '2026-10-19' ? 200 : 100,
+  }))
+  const check = checkPeriod('w1', watch, '2026-10-20', totals(rows), { channel: rows }, '2026-10-20T06:00:00.000Z')
+  assert.equal(check.granularity, 'day')
+  assert.deepEqual([check.from, check.to], ['2026-10-19', '2026-10-19'])
+  assert.deepEqual([check.value, check.previousValue], [1.5, 3])
+  assert.equal(check.reason, 'Below the usual 2.55–3.45 of the eight days before.')
+  assert.match(check.text, /^ROAS, 19 Oct 2026: fell 50% to 1\.50 \(3\.00 the day before\)\./)
+})
+
+test('a month watch checks the last full month from month-truncated rows', () => {
+  const watch: Watch = { ...roas, granularity: 'month' }
+  // One row a month, as the Data Mart returns month-truncated sums: ROAS 3 until September halves it.
+  const rows: SumRow[] = Array.from({ length: 10 }, (_, i) => shiftPeriod('month', '2026-10-01', -(i + 1))).map(day => ({
+    day,
+    segment: 'google / cpc',
+    numerator: day === '2026-09-01' ? 1500 : 3000,
+    denominator: 1000,
+  }))
+  const check = checkPeriod('w1', watch, '2026-10-01', totals(rows), { channel: rows }, '2026-10-01T06:00:00.000Z')
+  assert.deepEqual([check.from, check.to], ['2026-09-01', '2026-09-30'])
+  assert.deepEqual([check.value, check.previousValue, check.change], [1.5, 3, -50])
+  assert.equal(check.reason, 'Below the usual 2.55–3.45 of the eight months before.')
+  assert.match(check.text, /^ROAS, Sep 2026: fell 50% to 1\.50 \(3\.00 the month before\)\./)
+  assert.equal(check.weeks.length, 9)
+  assert.equal(check.weeks[0].from, '2026-01-01')
+})
+
+test('a period without rows names its period', () => {
+  const check = checkPeriod('w1', { ...roas, granularity: 'quarter' }, '2026-10-01', [], { channel: [] }, '2026-10-01T06:00:00.000Z')
+  assert.equal(check.value, null)
+  assert.equal(check.reason, 'No cost this quarter, so ROAS is undefined.')
+  assert.equal(check.text, 'ROAS, Q3 2026: No cost this quarter, so ROAS is undefined.')
 })

@@ -4,16 +4,8 @@ import { createBackend, exactCredential, type BackendActionContext } from '@owox
 import { CHART_PATH, CHART_WEEKS, chartLink, chartOf, chartSvg, chartWeeks, type ChartData } from './chart'
 import { docRequests, sheetCells, sheetRow, weekLink } from './google'
 import { png } from './png'
-import {
-  checkWeek,
-  firstDay,
-  missingColumnsMessage,
-  placesOf,
-  shiftDay,
-  type Check,
-  type SumRow,
-  type Watch,
-} from './watch'
+import { asOfFor, firstDayFor, granularityOf, shiftDay, shiftPeriod } from './period'
+import { checkPeriod, missingColumnsMessage, placesOf, type Check, type SumRow, type Watch } from './watch'
 
 type Env = {
   /** Signs chart links; set with `npx wrangler secret put CHART_KEY`. Without it a Doc gets no chart. */
@@ -116,8 +108,9 @@ const backend = (charts: Charts) => createBackend({
       const dataMart = (await ctx.owox.dataMarts.list()).find(item => item.id === watch.dataMartId)
       if (!dataMart) throw failure('DATA_MART_NOT_FOUND', 'This Data Mart is not available to you.')
 
-      const asOf = new Date().toISOString().slice(0, 10)
-      const [from, to] = [firstDay(asOf, weeks), shiftDay(asOf, -1)]
+      const granularity = granularityOf(watch)
+      const asOf = asOfFor(granularity, new Date().toISOString().slice(0, 10))
+      const [from, to] = [firstDayFor(granularity, asOf, weeks), shiftDay(asOf, -1)]
       let sums: Awaited<ReturnType<typeof readSums>>
       try {
         sums = await readSums(ctx, watch, from, to)
@@ -135,8 +128,8 @@ const backend = (charts: Charts) => createBackend({
       // Saved by the Worker, so a check started before the plugin closed is there when it reopens.
       const checkedAt = new Date().toISOString()
       const history = ctx.collections<Check>('checks')
-      for (let week = 0; week < weeks; week++) {
-        const check = checkWeek(watchId, watch, shiftDay(asOf, -7 * week), totals, byDimension, checkedAt)
+      for (let k = 0; k < weeks; k++) {
+        const check = checkPeriod(watchId, watch, shiftPeriod(granularity, asOf, -k), totals, byDimension, checkedAt)
         await history.put(`${watchId}~${check.asOf}`, { ...check, trigger: ctx.execution.trigger })
       }
       return { checked: weeks }

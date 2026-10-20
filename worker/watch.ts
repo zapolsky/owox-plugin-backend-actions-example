@@ -1,3 +1,5 @@
+import { BASELINE_PERIODS, granularityOf, periodAt, periodLabel, type Granularity } from './period.ts'
+
 /** When a check alerts: outside the usual range of the weeks before, or a change bigger than a percent. */
 export type Rule =
   | { kind: 'unusual' }
@@ -31,11 +33,14 @@ export type Watch = {
   rise?: 'good' | 'bad'
   /** `medium` when unset. */
   sensitivity?: Sensitivity
+  /** How long a checked period is; `week` when unset, as for watches saved before periods. */
+  granularity?: Granularity
 }
 
 /** Sums for one day, and for one value of a dimension when `segment` is set. */
 export type SumRow = { day: string; segment?: string; numerator: number; denominator: number }
 
+/** A checked period; named for the weekly first version. */
 export type Week = { from: string; to: string; value: number | null }
 
 export type Segment = {
@@ -55,56 +60,31 @@ export type Breakdown = { dimension: string; segments: Segment[] }
 export type Check = {
   watchId: string
   name: string
-  /** The day the check ran for: it covers the seven days before it. */
+  /** The watch's period when it was checked; a week when unset. */
+  granularity?: Granularity
+  /** The first day after the checked period. */
   asOf: string
   from: string
   to: string
   value: number | null
   previousValue: number | null
-  /** Whole percent against the week before. */
+  /** Whole percent against the period before. */
   change: number | null
-  /** Median ± 3 robust deviations of the eight weeks before. */
+  /** Median ± robust deviations of the eight periods before. */
   usual: { low: number; high: number } | null
   alert: boolean
   reason: string
-  /** Nine weeks, oldest first; the last one is the checked week. */
+  /** The checked period and the eight before it, oldest first; named for the weekly first version. */
   weeks: Week[]
   breakdowns: Breakdown[]
   text: string
   checkedAt: string
-  /** What started the check: the page, or the watch's weekly schedule. */
+  /** What started the check: the page, or the watch's schedule. */
   trigger?: 'frontend' | 'schedule'
 }
 
-const DAY_MS = 86_400_000
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-/** The weeks before the checked one that set its usual range. */
-export const BASELINE_WEEKS = 8
 /** Segments a dimension keeps; the rest are summed into one "Other" row. */
 const TOP_SEGMENTS = 6
-
-export const shiftDay = (day: string, days: number) =>
-  new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10)
-
-/** Week `k` before `asOf`: seven days that end `7k + 1` days before it. */
-export const weekAt = (asOf: string, k: number) => ({
-  from: shiftDay(asOf, -7 * (k + 1)),
-  to: shiftDay(asOf, -7 * k - 1),
-})
-
-/** The first day that `checks` weekly checks back from `asOf` read, with their usual ranges. */
-export const firstDay = (asOf: string, checks: number) =>
-  weekAt(asOf, checks - 1 + BASELINE_WEEKS).from
-
-/** `8–14 Oct 2026`, or `26 Sep – 2 Oct 2026` across months. */
-export function formatRange(from: string, to: string): string {
-  const [start, end] = [new Date(`${from}T00:00:00Z`), new Date(`${to}T00:00:00Z`)]
-  const day = (date: Date) => `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]}`
-  if (start.getUTCMonth() === end.getUTCMonth() && start.getUTCFullYear() === end.getUTCFullYear()) {
-    return `${start.getUTCDate()}–${day(end)} ${end.getUTCFullYear()}`
-  }
-  return `${day(start)} – ${day(end)} ${end.getUTCFullYear()}`
-}
 
 /**
  * Decimal places for a watch's values: null for a sum, and for a ratio near `value` enough for
@@ -256,23 +236,24 @@ function judge(
   usual: Check['usual'],
   places: number | null,
 ): { alert: boolean; reason: string } {
+  const unit = granularityOf(watch)
   const ratio = watch.denominator !== null
   if (value === null) {
     return {
       alert: false,
-      reason: ratio ? `No ${watch.denominator} this week, so ${watch.name} is undefined.` : 'No data this week.',
+      reason: ratio ? `No ${watch.denominator} this ${unit}, so ${watch.name} is undefined.` : `No data this ${unit}.`,
     }
   }
   if (watch.rule.kind === 'unusual') {
-    if (!usual) return { alert: false, reason: 'Needs four earlier weeks with data to know the usual range.' }
+    if (!usual) return { alert: false, reason: `Needs four earlier ${unit}s with data to know the usual range.` }
     const range = `${formatMetric(usual.low, watch, places)}–${formatMetric(usual.high, watch, places)}`
     const side = value < usual.low ? 'Below' : value > usual.high ? 'Above' : null
-    if (!side) return { alert: false, reason: `Within the usual ${range} of the eight weeks before.` }
+    if (!side) return { alert: false, reason: `Within the usual ${range} of the eight ${unit}s before.` }
     // Only the bad side alerts: ROAS above its range is good news, cost above its range is not.
     const alert = (side === 'Below') === ((watch.rise ?? 'good') === 'good')
-    return { alert, reason: `${side} the usual ${range} of the eight weeks before${alert ? '' : ', which is good news'}.` }
+    return { alert, reason: `${side} the usual ${range} of the eight ${unit}s before${alert ? '' : ', which is good news'}.` }
   }
-  if (!previousValue) return { alert: false, reason: 'No week before to compare with.' }
+  if (!previousValue) return { alert: false, reason: `No ${unit} before to compare with.` }
   const change = (value / previousValue - 1) * 100
   const { percent: limit, direction } = watch.rule
   const alert =
@@ -281,7 +262,7 @@ function judge(
   return { alert, reason: alert ? `${moved}, past the ${limit}% the rule allows.` : `${moved}, within ${limit}%.` }
 }
 
-/** Below this, a weekly change is everyday noise, and naming what drove it would be guessing. */
+/** Below this, a change is everyday noise, and naming what drove it would be guessing. */
 const EXPLAINED_CHANGE = 5
 
 /** The value of one dimension that moved the metric most its way, and its share of that move. */
@@ -389,7 +370,7 @@ export function explain(check: Check, watch: Watch): Explanation | null {
 }
 
 function describe(watch: Watch, check: Omit<Check, 'text'>, places: number | null): string {
-  const range = formatRange(check.from, check.to)
+  const range = periodLabel(granularityOf(watch), check.from, check.to)
   if (check.value === null) return `${watch.name}, ${range}: ${check.reason}`
   const { change } = check
   const value = formatMetric(check.value, watch, places)
@@ -400,7 +381,7 @@ function describe(watch: Watch, check: Omit<Check, 'text'>, places: number | nul
         ? `held at ${value}`
         : `${change < 0 ? 'fell' : 'rose'} ${Math.abs(change)}% to ${value}`
   const sentences = [
-    `${watch.name}, ${range}: ${moved}${check.previousValue === null ? '' : ` (${formatMetric(check.previousValue, watch, places)} the week before)`}.`,
+    `${watch.name}, ${range}: ${moved}${check.previousValue === null ? '' : ` (${formatMetric(check.previousValue, watch, places)} the ${granularityOf(watch)} before)`}.`,
   ]
   if (check.alert) sentences.push(check.reason)
 
@@ -458,8 +439,8 @@ export function shareOf(
 
 export const signedPercent = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value)}%`
 
-/** Checks the week before `asOf` from daily sums: in total, and per value of each dimension. */
-export function checkWeek(
+/** Checks the period before `asOf` from sums per day or per period: in total, and per value of each dimension. */
+export function checkPeriod(
   watchId: string,
   watch: Watch,
   asOf: string,
@@ -467,16 +448,17 @@ export function checkWeek(
   byDimension: Record<string, SumRow[]>,
   checkedAt: string,
 ): Check {
+  const granularity = granularityOf(watch)
   const ratio = watch.denominator !== null
-  const weeks = Array.from({ length: BASELINE_WEEKS + 1 }, (_, i) => {
-    const window = weekAt(asOf, BASELINE_WEEKS - i)
+  const weeks = Array.from({ length: BASELINE_PERIODS + 1 }, (_, i) => {
+    const window = periodAt(granularity, asOf, BASELINE_PERIODS - i)
     const sums = sumBySegment(totals, window.from, window.to)
-    // A week without rows has no value: zero would make an empty history look like a usual range.
+    // A period without rows has no value: zero would make an empty history look like a usual range.
     return { ...window, value: sums.size > 0 ? metric(total(sums.values()), ratio) : null }
   })
-  const [current, previous] = [weeks[BASELINE_WEEKS], weeks[BASELINE_WEEKS - 1]]
+  const [current, previous] = [weeks[BASELINE_PERIODS], weeks[BASELINE_PERIODS - 1]]
   const usual = usualRange(
-    weeks.slice(0, BASELINE_WEEKS).map(week => week.value),
+    weeks.slice(0, BASELINE_PERIODS).map(week => week.value),
     DEVIATIONS[watch.sensitivity ?? 'medium'],
   )
   const places = placesFor(ratio, current.value ?? previous.value)
@@ -485,6 +467,7 @@ export function checkWeek(
   const check = {
     watchId,
     name: watch.name,
+    granularity,
     asOf,
     from: current.from,
     to: current.to,
@@ -512,7 +495,7 @@ export function standing(check: Check, watch: Watch): string {
   const result = verdict(check, watch)
   if (result.tone === 'none') return check.reason
   if (watch.rule.kind === 'change') {
-    return result.tone === 'bad' ? result.label : `Within ${watch.rule.percent}% of the week before`
+    return result.tone === 'bad' ? result.label : `Within ${watch.rule.percent}% of the ${granularityOf(watch)} before`
   }
   const places = placesOf(check, watch)
   const range = `${formatMetric(check.usual!.low, watch, places)}–${formatMetric(check.usual!.high, watch, places)}`

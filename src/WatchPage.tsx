@@ -3,7 +3,8 @@ import { ArrowLeft, CalendarClock, Ellipsis, FileUp, LoaderCircle, Pencil, Refre
 import type { PluginSchedule } from '@owox/plugin-sdk'
 import { CHART_WEEKS } from '../worker/chart'
 import { exportTarget } from '../worker/google'
-import { formatRange, verdict, type Check, type Watch } from '../worker/watch'
+import { formatRange } from '../worker/period'
+import { verdict, type Check, type Watch } from '../worker/watch'
 import { CheckedAt, HistoryChart, WeekKpi, WeekStrip, WhatHappened, WhyItChanged } from './CheckView'
 
 export type ScheduleChange = 'create' | 'pause' | 'resume' | 'delete'

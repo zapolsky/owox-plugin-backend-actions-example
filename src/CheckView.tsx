@@ -5,7 +5,6 @@ import {
   explain,
   formatDelta,
   formatMetric,
-  formatRange,
   leadDriver,
   placesOf,
   shareOf,
@@ -17,6 +16,7 @@ import {
   type Watch,
   type Week,
 } from '../worker/watch'
+import { formatRange } from '../worker/period'
 import { chartLayout, chartWeeks, shortDay } from '../worker/chart'
 
 /** `15 Oct, 16:29` in the member's time zone. */
