@@ -3,7 +3,7 @@ import { ArrowLeft, CalendarClock, Ellipsis, FileUp, LoaderCircle, Pencil, Refre
 import type { PluginSchedule } from '@owox/plugin-sdk'
 import { CHART_PERIODS } from '../worker/chart'
 import { exportTarget } from '../worker/google'
-import { formatRange } from '../worker/period'
+import { ADVERB, count, FIRST_CHECK, granularityOf, periodLabel, SCHEDULES, type Granularity } from '../worker/period'
 import { verdict, type Check, type Watch } from '../worker/watch'
 import { CheckedAt, HistoryChart, WeekKpi, WeekStrip, WhatHappened, WhyItChanged } from './CheckView'
 
@@ -12,14 +12,15 @@ export type ScheduleChange = 'create' | 'pause' | 'resume' | 'delete'
 const formula = (watch: Watch) => (watch.denominator ? `${watch.numerator} ÷ ${watch.denominator}` : `sum of ${watch.numerator}`)
 
 const ruleText = (watch: Watch) => {
+  const unit = granularityOf(watch)
   if (watch.rule.kind === 'change') {
     return `alerts on a change of more than ${watch.rule.percent}% ${
       watch.rule.direction === 'any' ? 'either way' : watch.rule.direction
-    } against the week before`
+    } against the ${unit} before`
   }
   const side = (watch.rise ?? 'good') === 'good' ? 'falls below' : 'rises above'
   const sensitivity = { low: ', fewer alerts', medium: '', high: ', more alerts' }[watch.sensitivity ?? 'medium']
-  return `alerts when a week ${side} its usual range${sensitivity}`
+  return `alerts when a ${unit} ${side} its usual range${sensitivity}`
 }
 
 /** Closes a popover on a press outside it. */
@@ -36,8 +37,8 @@ function useDismiss(open: boolean, close: () => void) {
   return ref
 }
 
-/** Sends the selected week to a Google Doc or Sheet; a pasted link picks which. */
-function ExportMenu({ range, onExport }: { range: string; onExport: (link: string) => Promise<string> }) {
+/** Sends the selected period to a Google Doc or Sheet; a pasted link picks which. */
+function ExportMenu({ range, unit, onExport }: { range: string; unit: Granularity; onExport: (link: string) => Promise<string> }) {
   const [open, setOpen] = useState(false)
   const [kind, setKind] = useState<'Doc' | 'Sheet'>('Doc')
   const [link, setLink] = useState('')
@@ -98,7 +99,7 @@ function ExportMenu({ range, onExport }: { range: string; onExport: (link: strin
             />
           </label>
           <p className="dm-muted hint flush">
-            Share the {kind} with the plugin's service account first. The week is added {kind === 'Doc' ? 'at the end' : 'as a row'}.
+            Share the {kind} with the plugin's service account first. The {unit} is added {kind === 'Doc' ? 'at the end' : 'as a row'}.
           </p>
           {result && (
             <p role={result.ok ? 'status' : 'alert'} className={result.ok ? 'dm-muted flush' : 'alert'}>
@@ -125,8 +126,15 @@ const stoppedBecause: Record<NonNullable<PluginSchedule['disabledReason']>, stri
   INVALID_PARAMETERS: 'this version of Metric Watch no longer accepts this watch',
 }
 
-/** The watch's weekly check, which OWOX runs with the plugin closed. */
-function ScheduleMenu({ schedule, onChange }: { schedule: PluginSchedule | undefined; onChange: (change: ScheduleChange) => Promise<void> }) {
+/** The watch's scheduled check, which OWOX runs with the plugin closed. */
+function ScheduleMenu({
+  schedule,
+  granularity,
+  onChange,
+}: {
+  schedule: PluginSchedule | undefined
+  granularity: Granularity
+  onChange: (change: ScheduleChange) => Promise<void> }) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const close = () => setOpen(false)
@@ -140,15 +148,15 @@ function ScheduleMenu({ schedule, onChange }: { schedule: PluginSchedule | undef
   return (
     <div className="menu-anchor" ref={ref}>
       <button className="button secondary" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <CalendarClock size={16} aria-hidden /> {!schedule ? 'Schedule' : schedule.enabled ? 'Weekly' : schedule.disabledReason ? 'Stopped' : 'Paused'}
+        <CalendarClock size={16} aria-hidden /> {!schedule ? 'Schedule' : schedule.enabled ? ADVERB[granularity] : schedule.disabledReason ? 'Stopped' : 'Paused'}
       </button>
       {open && (
-        <div className="popover" role="dialog" aria-label="Weekly check" onKeyDown={event => event.key === 'Escape' && close()}>
-          <strong>Weekly check</strong>
+        <div className="popover" role="dialog" aria-label={`${ADVERB[granularity]} check`} onKeyDown={event => event.key === 'Escape' && close()}>
+          <strong>{ADVERB[granularity]} check</strong>
           {schedule ? (
             <>
               <p className="dm-muted hint flush">
-                Every Monday at 09:00, {schedule.timeZone}.{' '}
+                {SCHEDULES[granularity].when}, {schedule.timeZone}.{' '}
                 {schedule.enabled && schedule.nextRunAt ? (
                   <>
                     Next check <CheckedAt iso={schedule.nextRunAt} />.
@@ -183,11 +191,11 @@ function ScheduleMenu({ schedule, onChange }: { schedule: PluginSchedule | undef
           ) : (
             <>
               <p className="dm-muted hint flush">
-                Check the last week every Monday at 09:00, your time. The plugin can stay closed: the result is saved here.
+                {SCHEDULES[granularity].when}, your time, check the last {granularity}. The plugin can stay closed: the result is saved here.
               </p>
               <div className="actions end">
                 <button className="button" onClick={() => change('create')} disabled={busy}>
-                  {busy && <LoaderCircle className="spin" size={16} aria-hidden />} Check weekly
+                  {busy && <LoaderCircle className="spin" size={16} aria-hidden />} Check {ADVERB[granularity].toLowerCase()}
                 </button>
               </div>
             </>
@@ -199,7 +207,17 @@ function ScheduleMenu({ schedule, onChange }: { schedule: PluginSchedule | undef
 }
 
 /** Edit and Delete, behind one button; Delete asks once. */
-function MoreMenu({ name, weeks, onEdit, onDelete }: { name: string; weeks: number; onEdit: () => void; onDelete: () => void }) {
+function MoreMenu({
+  name,
+  checks,
+  unit,
+  onEdit,
+  onDelete,
+}: {
+  name: string
+  checks: number
+  unit: Granularity
+  onEdit: () => void; onDelete: () => void }) {
   const [open, setOpen] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const close = () => {
@@ -217,7 +235,7 @@ function MoreMenu({ name, weeks, onEdit, onDelete }: { name: string; weeks: numb
           {confirming ? (
             <>
               <p className="flush">
-                Delete {name} and its {weeks} checked {weeks === 1 ? 'week' : 'weeks'}?
+                Delete {name} and its {checks} checked {checks === 1 ? unit : `${unit}s`}?
               </p>
               <div className="actions end">
                 <button className="button secondary" onClick={() => setConfirming(false)}>
@@ -250,7 +268,7 @@ function MoreMenu({ name, weeks, onEdit, onDelete }: { name: string; weeks: numb
   )
 }
 
-/** One watch: the selected week (the latest by default), what happened, the last weeks and why it changed. */
+/** One watch: the selected period (the latest by default), what happened, the last periods and why it changed. */
 export function WatchPage({
   watchId,
   watch,
@@ -288,6 +306,7 @@ export function WatchPage({
   const selected = history.find(check => check.asOf === asOf) ?? history[0]
   const recent = history.slice(0, CHART_PERIODS).reverse()
   const alerts = watch ? recent.filter(check => verdict(check, watch).tone === 'bad').length : 0
+  const unit = granularityOf(watch)
 
   return (
     <div className="dm-page">
@@ -316,12 +335,13 @@ export function WatchPage({
           {watch && selected && (
             <ExportMenu
               key={selected.asOf}
-              range={formatRange(selected.from, selected.to)}
+              range={periodLabel(unit, selected.from, selected.to)}
+              unit={unit}
               onExport={link => onExport(`${watchId}~${selected.asOf}`, link)}
             />
           )}
-          {watch && onSchedule && <ScheduleMenu schedule={schedule} onChange={onSchedule} />}
-          {watch && <MoreMenu name={watch.name} weeks={history.length} onEdit={onEdit} onDelete={onDelete} />}
+          {watch && onSchedule && <ScheduleMenu schedule={schedule} granularity={unit} onChange={onSchedule} />}
+          {watch && <MoreMenu name={watch.name} checks={history.length} unit={unit} onEdit={onEdit} onDelete={onDelete} />}
         </div>
       </header>
       <main className="dm-page-content">
@@ -329,7 +349,7 @@ export function WatchPage({
         {running && (
           <p className="dm-card status" role="status">
             <LoaderCircle className="spin" size={16} aria-hidden />
-            Checking {history.length === 0 ? 'the last 12 weeks' : 'the last week'}. You can close the plugin: the result is saved
+            Checking {history.length === 0 ? `the last ${count(FIRST_CHECK[unit], unit)}` : `the last ${unit}`}. You can close the plugin: the result is saved
             here.
           </p>
         )}
@@ -342,7 +362,7 @@ export function WatchPage({
             <section className="dm-card" aria-labelledby="weeks-title">
               <div className="card-head">
                 <h2 id="weeks-title" className="card-title">
-                  Last {recent.length} {recent.length === 1 ? 'week' : 'weeks'}
+                  Last {count(recent.length, unit)}
                   <span className="dm-muted">
                     {alerts} {alerts === 1 ? 'alert' : 'alerts'}
                   </span>
@@ -353,7 +373,7 @@ export function WatchPage({
                   </span>
                   {watch.rule.kind === 'unusual' && (
                     <span>
-                      <i className="band" aria-hidden /> Usual range of each week
+                      <i className="band" aria-hidden /> Usual range of each {unit}
                     </span>
                   )}
                   <span>
@@ -372,7 +392,7 @@ export function WatchPage({
             <WhyItChanged key={`${watchId}~${selected.asOf}`} check={selected} watch={watch} />
           </>
         ) : (
-          !running && <section className="dm-card empty dm-muted">No checked weeks yet. Check now to see the last one.</section>
+          !running && <section className="dm-card empty dm-muted">No checked {unit}s yet. Check now to see the last one.</section>
         )}
       </main>
     </div>

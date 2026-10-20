@@ -16,7 +16,7 @@ import {
   type Watch,
   type Week,
 } from '../worker/watch'
-import { formatRange, granularityOf, shortLabel } from '../worker/period'
+import { ADVERB, granularityOf, periodLabel, shortLabel } from '../worker/period'
 import { chartLayout, chartWeeks } from '../worker/chart'
 
 /** `15 Oct, 16:29` in the member's time zone. */
@@ -46,7 +46,7 @@ export function VerdictBadge({ verdict }: { verdict: Verdict }) {
   )
 }
 
-/** Weekly values as a small line over the usual range; the last dot is the checked week. */
+/** Values by period as a small line over the usual range; the last dot is the checked period. */
 export function Sparkline({ weeks, usual, tone }: { weeks: Week[]; usual: Check['usual']; tone: Verdict['tone'] }) {
   const known = weeks.flatMap((week, i) => (week.value === null ? [] : [{ i, value: week.value }]))
   if (known.length < 2) return null
@@ -81,8 +81,8 @@ function useWidth() {
 const CHART_HEIGHT = 260
 
 /**
- * The checked weeks, oldest first, each over its own usual range: the range moves as the weeks
- * before it change. Alerts are red, good news green; hovering shows a week, clicking opens it.
+ * The checked periods, oldest first, each over its own usual range: the range moves as the periods
+ * before it change. Alerts are red, good news green; hovering shows a period, clicking opens it.
  */
 export function HistoryChart({
   checks,
@@ -95,6 +95,7 @@ export function HistoryChart({
   selected: Check
   onSelect: (asOf: string) => void
 }) {
+  const unit = granularityOf(watch)
   const [ref, width] = useWidth()
   const [hover, setHover] = useState<number | null>(null)
   const places = placesOf(selected, watch)
@@ -116,7 +117,7 @@ export function HistoryChart({
           width={width}
           height={CHART_HEIGHT}
           role="img"
-          aria-label={`${watch.name} by week: ${checks.map(check => `${shortLabel(granularityOf(watch), check.from)} ${formatMetric(check.value, watch, places)}`).join(', ')}`}
+          aria-label={`${watch.name} by ${unit}: ${checks.map(check => `${shortLabel(unit, check.from)} ${formatMetric(check.value, watch, places)}`).join(', ')}`}
           onPointerMove={event => setHover(indexAt(event))}
           onPointerLeave={() => setHover(null)}
           onClick={event => onSelect(checks[indexAt(event)].asOf)}
@@ -146,7 +147,7 @@ export function HistoryChart({
           {checks.map((check, i) =>
             layout.dated(i) ? (
               <text key={check.asOf} className={i === at ? 'tick current' : 'tick'} x={x(i)} y={CHART_HEIGHT - 6} textAnchor="middle">
-                {shortLabel(granularityOf(watch), check.from)}
+                {shortLabel(unit, check.from)}
               </text>
             ) : null,
           )}
@@ -169,13 +170,13 @@ export function HistoryChart({
           style={{ left: x(hover), top: Math.min(bottom - 60, Math.max(top + 60, hovered.value === null ? top : y(hovered.value))) }}
           aria-hidden
         >
-          <span className="dm-muted">{formatRange(hovered.from, hovered.to)}</span>
+          <span className="dm-muted">{periodLabel(unit, hovered.from, hovered.to)}</span>
           <strong>
             {watch.name} {formatMetric(hovered.value, watch, places)}
           </strong>
           {hovered.change !== null && (
             <span>
-              <Change value={hovered.change} tone={verdict(hovered, watch).tone} /> vs the week before
+              <Change value={hovered.change} tone={verdict(hovered, watch).tone} /> vs the {unit} before
             </span>
           )}
           <span>{standing(hovered, watch)}</span>
@@ -185,7 +186,7 @@ export function HistoryChart({
   )
 }
 
-/** The checked weeks as buttons, oldest first: the chart's points, readable and reachable by keyboard. */
+/** The checked periods as buttons, oldest first: the chart's points, readable and reachable by keyboard. */
 export function WeekStrip({
   checks,
   watch,
@@ -197,9 +198,10 @@ export function WeekStrip({
   selected: Check
   onSelect: (asOf: string) => void
 }) {
+  const unit = granularityOf(watch)
   const places = placesOf(selected, watch)
   const ref = useRef<HTMLDivElement>(null)
-  // The newest weeks are on the right: keep the selected one in view when the strip scrolls.
+  // The newest periods are on the right: keep the selected one in view when the strip scrolls.
   useLayoutEffect(() => {
     const strip = ref.current
     const button = strip?.querySelector<HTMLElement>('.week.selected')
@@ -209,7 +211,7 @@ export function WeekStrip({
     }
   }, [selected])
   return (
-    <div className="week-strip" role="group" aria-label="Checked weeks" ref={ref}>
+    <div className="week-strip" role="group" aria-label={`Checked ${unit}s`} ref={ref}>
       {checks.map(check => {
         const result = verdict(check, watch)
         return (
@@ -217,12 +219,12 @@ export function WeekStrip({
             key={check.asOf}
             className={check === selected ? 'week selected' : 'week'}
             aria-pressed={check === selected}
-            aria-label={`${formatRange(check.from, check.to)}: ${formatMetric(check.value, watch, places)}, ${result.label}`}
+            aria-label={`${periodLabel(unit, check.from, check.to)}: ${formatMetric(check.value, watch, places)}, ${result.label}`}
             onClick={() => onSelect(check.asOf)}
           >
             <span className="week-day">
               <i className={`dot ${result.tone}`} aria-hidden />
-              {shortLabel(granularityOf(watch), check.from)}
+              {shortLabel(unit, check.from)}
             </span>
             <span className="week-value">{formatMetric(check.value, watch, places)}</span>
             <Change value={check.change} tone={result.tone} />
@@ -233,18 +235,19 @@ export function WeekStrip({
   )
 }
 
-/** The checked week's value and where it stands. */
+/** The checked period's value and where it stands. */
 export function WeekKpi({ check, watch }: { check: Check; watch: Watch }) {
+  const unit = granularityOf(watch)
   const places = placesOf(check, watch)
   const result = verdict(check, watch)
   return (
     <section className="dm-card kpi-card" aria-labelledby="kpi-title">
       <span id="kpi-title" className="kpi-label">
-        {formatRange(check.from, check.to)}
+        {periodLabel(unit, check.from, check.to)}
       </span>
       <span className="big-value">{formatMetric(check.value, watch, places)}</span>
       <span className="kpi-note">
-        <Change value={check.change} tone={result.tone} /> vs {formatMetric(check.previousValue, watch, places)} the week before
+        <Change value={check.change} tone={result.tone} /> vs {formatMetric(check.previousValue, watch, places)} the {unit} before
       </span>
       <span className={`badge large ${result.tone}`}>
         {result.tone === 'bad' ? <TriangleAlert size={14} aria-hidden /> : result.tone === 'good' ? <TrendingUp size={14} aria-hidden /> : null}
@@ -254,15 +257,16 @@ export function WeekKpi({ check, watch }: { check: Check; watch: Watch }) {
   )
 }
 
-/** The week's change in words: what drove it and what each column adds. */
+/** The period's change in words: what drove it and what each column adds. */
 export function WhatHappened({ check, watch }: { check: Check; watch: Watch }) {
+  const unit = granularityOf(watch)
   const explanation = explain(check, watch)
   const fallback =
     check.value === null
       ? check.reason
       : check.previousValue === null
-        ? 'No week before to compare with.'
-        : `${watch.name} moved ${signedPercent(check.change ?? 0)} against the week before, too little to name a cause.`
+        ? `No ${unit} before to compare with.`
+        : `${watch.name} moved ${signedPercent(check.change ?? 0)} against the ${unit} before, too little to name a cause.`
   return (
     <section className="happened" aria-labelledby="happened-title">
       <span id="happened-title" className="happened-label">
@@ -288,6 +292,7 @@ function Percent({ value }: { value: number | null }) {
 
 /** Which values of one column moved the metric, a column at a time, starting with the one the headline names. */
 export function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
+  const unit = granularityOf(watch)
   const places = placesOf(check, watch)
   const ratio = watch.denominator !== null
   const change = check.value !== null && check.previousValue !== null ? check.value - check.previousValue : 0
@@ -309,7 +314,7 @@ export function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
         Why it changed
       </h2>
       {selected.segments.length === 0 ? (
-        <p className="dm-muted hint flush">Nothing to compare with the week before.</p>
+        <p className="dm-muted hint flush">Nothing to compare with the {unit} before.</p>
       ) : (
         <>
           <p className="dm-muted hint flush">
@@ -400,7 +405,7 @@ export function WhyItChanged({ check, watch }: { check: Check; watch: Watch }) {
       )}
       <p className="dm-muted hint">
         Checked <CheckedAt iso={check.checkedAt} />
-        {check.trigger === 'schedule' && ' by the weekly schedule'}
+        {check.trigger === 'schedule' && ` by the ${ADVERB[unit].toLowerCase()} schedule`}
       </p>
     </section>
   )

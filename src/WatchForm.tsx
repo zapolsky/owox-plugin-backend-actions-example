@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { LoaderCircle } from 'lucide-react'
 import type { PluginContext } from '@owox/plugin-sdk'
-import { formatMetric, type Format, type Rule, type Sensitivity, type Watch } from '../worker/watch'
+import { analysisKey, formatMetric, type Format, type Rule, type Sensitivity, type Watch } from '../worker/watch'
+import { count, FIRST_CHECK, type Granularity } from '../worker/period'
 
 export type DataMartOption = { id: string; title: string }
 
@@ -17,6 +18,12 @@ const SENSITIVITIES: [Sensitivity, string][] = [
   ['low', 'Fewer alerts'],
   ['medium', 'Balanced'],
   ['high', 'More alerts'],
+]
+const PERIODS: [Granularity, string][] = [
+  ['day', 'Day'],
+  ['week', 'Week'],
+  ['month', 'Month'],
+  ['quarter', 'Quarter'],
 ]
 
 /** Sorts a Data Mart's columns by the values of its first row. */
@@ -43,18 +50,6 @@ function formatFor(numerator: string, denominator: string): Format {
 
 /** More cost is bad news; most other metrics are better higher. */
 const riseFor = (numerator: string) => (/cost|spend/i.test(numerator) ? 'bad' : 'good')
-
-/** What makes saved checks wrong when it changes, so saving checks the weeks again. */
-const analysis = (watch: Watch) =>
-  JSON.stringify([
-    watch.dataMartId,
-    watch.dateColumn,
-    watch.numerator,
-    watch.denominator,
-    [...watch.dimensions].sort(),
-    watch.rule,
-    watch.sensitivity ?? 'medium',
-  ])
 
 /** A select's columns, keeping a saved one the Data Mart lacks so the member sees what to replace. */
 const withSaved = (columns: string[], saved: string) => (saved && !columns.includes(saved) ? [saved, ...columns] : columns)
@@ -104,6 +99,7 @@ export function WatchForm({
   const [dimensions, setDimensions] = useState<string[]>(saved?.dimensions ?? [])
   const [rule, setRule] = useState<Rule>(saved?.rule ?? { kind: 'unusual' })
   const [sensitivity, setSensitivity] = useState<Sensitivity>(saved?.sensitivity ?? 'medium')
+  const [granularity, setGranularity] = useState<Granularity>(saved?.granularity ?? 'week')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -178,8 +174,9 @@ export function WatchForm({
     format,
     rise,
     sensitivity,
+    granularity,
   }
-  const recheck = !saved || analysis(draft) !== analysis(saved)
+  const recheck = !saved || analysisKey(draft) !== analysisKey(saved)
   const invalid =
     !columns ||
     !dataMartTitle ||
@@ -199,17 +196,18 @@ export function WatchForm({
     }
   }
 
+  const first = count(FIRST_CHECK[granularity], granularity)
   const ratio = denominator !== ''
   const example =
     format === 'percent' ? 0.0196 : format === 'times' ? 1.99 : ratio ? 76.99 : 54138
   const ruleSentence =
     rule.kind === 'unusual'
-      ? `Alerts when a week ${rise === 'good' ? 'falls below' : 'rises above'} its usual range${
+      ? `Alerts when a ${granularity} ${rise === 'good' ? 'falls below' : 'rises above'} its usual range${
           { low: ', with fewer alerts', medium: '', high: ', with more alerts' }[sensitivity]
         }. ${rise === 'good' ? 'A rise above it' : 'A drop below it'} shows as good news, without an alert.`
       : `Alerts when ${draft.name || 'it'} ${
           rule.direction === 'any' ? 'changes' : rule.direction === 'down' ? 'falls' : 'rises'
-        } by more than ${rule.percent}% against the week before.`
+        } by more than ${rule.percent}% against the ${granularity} before.`
 
   return (
     // Not a <form>: the plugin frame is sandboxed without allow-forms, so a submit event never fires.
@@ -239,6 +237,21 @@ export function WatchForm({
               </label>
             )}
           </div>
+          {columns && (
+            <div className="field">
+              <span id="period">Period</span>
+              <div className="segmented wide" role="group" aria-labelledby="period">
+                {PERIODS.map(([value, label]) => (
+                  <button key={value} aria-pressed={granularity === value} onClick={() => setGranularity(value)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="dm-muted hint flush">
+                Each {granularity} is compared with the {granularity} before and the eight {granularity}s before it.
+              </p>
+            </div>
+          )}
           {loading && (
             <p className="dm-muted status">
               <LoaderCircle className="spin" size={16} aria-hidden /> Reading its columns…
@@ -346,10 +359,9 @@ export function WatchForm({
               <div className="rule-cards">
                 <div className={rule.kind === 'unusual' ? 'rule-card selected' : 'rule-card'}>
                   <label className="rule-title">
-                    <input type="radio" name="rule" checked={rule.kind === 'unusual'} onChange={() => setRule({ kind: 'unusual' })} />A
-                    week is unusual
+                    <input type="radio" name="rule" checked={rule.kind === 'unusual'} onChange={() => setRule({ kind: 'unusual' })} />A {granularity} is unusual
                   </label>
-                  <p className="dm-muted flush">Outside the usual range of the eight weeks before.</p>
+                  <p className="dm-muted flush">Outside the usual range of the eight {granularity}s before.</p>
                   {rule.kind === 'unusual' && (
                     <div className="field">
                       <span id="sensitivity">Sensitivity</span>
@@ -396,10 +408,10 @@ export function WatchForm({
                         <option value="up">up</option>
                         <option value="any">either way</option>
                       </select>
-                      against the week before
+                      against the {granularity} before
                     </p>
                   ) : (
-                    <p className="dm-muted flush">By more than a percent you choose, against the week before.</p>
+                    <p className="dm-muted flush">By more than a percent you choose, against the {granularity} before.</p>
                   )}
                 </div>
               </div>
@@ -430,15 +442,15 @@ export function WatchForm({
         )}
         <p className="dm-muted hint summary-cost">
           {!saved
-            ? 'The first check reads 12 weeks in one Data Mart run. You can close the plugin while it runs.'
+            ? `The first check reads ${first} in one Data Mart run. You can close the plugin while it runs.`
             : recheck
-              ? 'Saving checks the last 12 weeks again in one Data Mart run and replaces the checked weeks.'
-              : 'Saving keeps the checked weeks; only how they read changes.'}
+              ? `Saving checks the last ${first} again in one Data Mart run and replaces the saved checks.`
+              : `Saving keeps the checked ${granularity}s; only how they read changes.`}
         </p>
         <div className="actions">
           <button className="button" onClick={() => void submit()} disabled={invalid || saving}>
             {saving && <LoaderCircle className="spin" size={16} aria-hidden />}
-            {!saved ? 'Create and check 12 weeks' : recheck ? 'Save and check 12 weeks' : 'Save'}
+            {!saved ? `Create and check ${first}` : recheck ? `Save and check ${first}` : 'Save'}
           </button>
           <button className="button secondary" onClick={onCancel} disabled={saving}>
             Cancel

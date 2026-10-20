@@ -1,8 +1,9 @@
 import { ChevronRight, LoaderCircle } from 'lucide-react'
 import { driverChanges, drivers, formatMetric, leadDriver, placesOf, standing, verdict, type Check, type Watch } from '../worker/watch'
+import { ADVERB, granularityOf } from '../worker/period'
 import { Change, Sparkline, VerdictBadge } from './CheckView'
 
-/** The card's last line: what moved an unusual week, or where an ordinary one stands. */
+/** The card's last line: what moved an unusual period, or where an ordinary one stands. */
 function footnote(watch: Watch, latest: Check): { why: string; detail: string } | string {
   const tone = verdict(latest, watch).tone
   const lead = tone === 'bad' || tone === 'good' ? leadDriver(drivers(latest)) : null
@@ -10,7 +11,7 @@ function footnote(watch: Watch, latest: Check): { why: string; detail: string } 
   return standing(latest, watch)
 }
 
-/** A watch in the list, with its latest checked week. */
+/** A watch in the list, with its latest checked period. */
 export function WatchCard({
   watch,
   running,
@@ -29,7 +30,7 @@ export function WatchCard({
       <span className="watch-card-head">
         <span>
           <span className="watch-name">{watch.name}</span>
-          <span className="dm-muted watch-source">{watch.dataMartTitle}</span>
+          <span className="dm-muted watch-source">{watch.dataMartTitle} · {ADVERB[granularityOf(watch)]}</span>
         </span>
         {running ? (
           <span className="badge">

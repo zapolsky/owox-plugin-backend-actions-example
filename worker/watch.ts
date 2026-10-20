@@ -509,3 +509,16 @@ export function missingColumnsMessage(title: string, missing: readonly string[])
   const list = quoted.length > 1 ? `${quoted.slice(0, -1).join(', ')} or ${quoted.at(-1)}` : quoted[0]
   return `${title} has no ${list} column any more. Fix the Data Mart, or edit the watch to use other columns.`
 }
+
+/** What makes a watch's saved checks wrong when it changes, so saving it checks them again. */
+export const analysisKey = (watch: Watch) =>
+  JSON.stringify([
+    watch.dataMartId,
+    watch.dateColumn,
+    watch.numerator,
+    watch.denominator,
+    [...watch.dimensions].sort(),
+    watch.rule,
+    watch.sensitivity ?? 'medium',
+    granularityOf(watch),
+  ])

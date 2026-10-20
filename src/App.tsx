@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Activity, ArrowLeft, Plus } from 'lucide-react'
 import type { PluginCollection, PluginCollectionDocument, PluginContext, PluginSchedule } from '@owox/plugin-sdk'
 import { exportTarget } from '../worker/google'
-import { formatRange } from '../worker/period'
+import { FIRST_CHECK, granularityOf, scheduleFor } from '../worker/period'
 import { verdict, type Check, type Watch } from '../worker/watch'
 import { CheckedAt } from './CheckView'
 import { WatchCard } from './WatchCard'
@@ -15,7 +15,7 @@ type Saved<T> = PluginCollectionDocument<T>
  * A check the page started, kept on its watch: a page opened later, from anywhere, follows it until
  * it ends. The Worker reads the watch and ignores this field.
  */
-type Run = { executionId: string; weeks: number }
+type Run = { executionId: string; periods: number }
 type StoredWatch = Watch & { run?: Run }
 
 // The page keeps no storage, so where the member is lives in the plugin's route.
@@ -30,7 +30,8 @@ function parseRoute(path: string | undefined): Route {
   if (first === 'new') return { page: 'new' }
   if (first !== 'watches' || !watchId) return { page: 'list' }
   if (kind === 'edit') return { page: 'edit', watchId }
-  if (kind === 'weeks' && value) return { page: 'watch', watchId, asOf: value }
+  // `weeks` is where the links in exports made before periods point.
+  if ((kind === 'periods' || kind === 'weeks') && value) return { page: 'watch', watchId, asOf: value }
   return { page: 'watch', watchId }
 }
 
@@ -39,7 +40,7 @@ function routePath(route: Route): string {
   if (route.page === 'new') return '/new'
   const base = `/watches/${encodeURIComponent(route.watchId)}`
   if (route.page === 'edit') return `${base}/edit`
-  return route.asOf ? `${base}/weeks/${route.asOf}` : base
+  return route.asOf ? `${base}/periods/${route.asOf}` : base
 }
 
 type Filter = 'all' | 'attention' | 'usual'
@@ -64,6 +65,9 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** The member's time zone: a check's day and a schedule's 09:00 are taken in it. */
+const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
+
 export default function App({ ctx }: { ctx: PluginContext }) {
   const [route, setRoute] = useState(() => parseRoute(ctx.route))
   const [dataMarts, setDataMarts] = useState<DataMartOption[] | null>(null)
@@ -76,7 +80,7 @@ export default function App({ ctx }: { ctx: PluginContext }) {
   const watchStore = ctx.collections<StoredWatch>('watches')
   const checkStore = ctx.collections<Check>('checks')
 
-  /** A watch's weekly check: the schedule that starts `check-metric` for it. */
+  /** A watch's scheduled check: the schedule that starts `check-metric` for it. */
   const scheduleOf = (watchId: string) =>
     schedules.find(item => item.action === 'check-metric' && (item.parameters as { watchId?: unknown } | null)?.watchId === watchId)
 
@@ -140,10 +144,10 @@ export default function App({ ctx }: { ctx: PluginContext }) {
     return <p role="alert">This OWOX Data Marts deployment does not support backend actions.</p>
   }
 
-  const check = async (watchId: string, watch: StoredWatch, weeks: number) => {
+  const check = async (watchId: string, watch: StoredWatch, periods: number) => {
     try {
-      const { id: executionId } = await actions.start('check-metric', { watchId, weeks })
-      await watchStore.put(watchId, { ...watch, run: { executionId, weeks } })
+      const { id: executionId } = await actions.start('check-metric', { watchId, periods, timeZone: timeZone() })
+      await watchStore.put(watchId, { ...watch, run: { executionId, periods } })
       await reload()
     } catch (failure) {
       setError(errorMessage(failure))
@@ -158,8 +162,9 @@ export default function App({ ctx }: { ctx: PluginContext }) {
   }
 
   /**
-   * Saves a new or edited watch. A change that makes its checked weeks wrong replaces them with 12
-   * freshly checked weeks; a new watch looks back eleven weeks too, so its history is not empty.
+   * Saves a new or edited watch. A change that makes its checked periods wrong replaces them with a
+   * fresh first check; a new watch looks back the same way, so its history is not empty. Its
+   * schedule follows its period and name.
    */
   const save = async (id: string, watch: Watch, recheck: boolean) => {
     const run = watches?.find(saved => saved.id === id)?.document.run
@@ -168,24 +173,24 @@ export default function App({ ctx }: { ctx: PluginContext }) {
       await Promise.all(checks.filter(saved => saved.document.watchId === id).map(saved => checkStore.delete(saved.id)))
     }
     await watchStore.put(id, !recheck && run ? { ...watch, run } : watch)
+    const schedule = scheduleOf(id)
+    const wanted = scheduleFor(watch)
+    if (schedule && (schedule.cron !== wanted.cron || schedule.name !== wanted.name)) {
+      await ctx.schedules?.update(schedule.id, wanted)
+    }
     await reload()
     go({ page: 'watch', watchId: id })
-    if (recheck) await check(id, watch, 12)
+    if (recheck) await check(id, watch, FIRST_CHECK[granularityOf(watch)])
   }
 
-  /** Creates, pauses, resumes or deletes a watch's weekly check. */
+  /** Creates, pauses, resumes or deletes a watch's scheduled check. */
   const changeSchedule = async (watchId: string, watch: Watch, change: ScheduleChange) => {
     const store = ctx.schedules
     if (!store) return
     const schedule = scheduleOf(watchId)
     if (change === 'create') {
-      await store.create({
-        action: 'check-metric',
-        parameters: { watchId },
-        cron: '0 9 * * 1',
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        name: `Weekly check of ${watch.name}`.slice(0, 200),
-      })
+      const zone = timeZone()
+      await store.create({ action: 'check-metric', parameters: { watchId, timeZone: zone }, timeZone: zone, ...scheduleFor(watch) })
     } else if (schedule) {
       await (change === 'delete' ? store.delete(schedule.id) : store[change](schedule.id))
     }
@@ -193,7 +198,7 @@ export default function App({ ctx }: { ctx: PluginContext }) {
   }
 
   const remove = async (watchId: string, run: Run | undefined) => {
-    // First, so a failure leaves the watch and its weekly check as they were.
+    // First, so a failure leaves the watch and its scheduled check as they were.
     const schedule = scheduleOf(watchId)
     if (schedule) await ctx.schedules?.delete(schedule.id)
     if (run) await actions.cancel(run.executionId).catch(() => undefined)
@@ -276,7 +281,7 @@ export default function App({ ctx }: { ctx: PluginContext }) {
         onBack={() => go({ page: 'list' })}
         onSelect={asOf => go({ page: 'watch', watchId: route.watchId, asOf })}
         onCheck={() => {
-          if (saved) void check(saved.id, saved.document, historyOf(saved.id).length === 0 ? 12 : 1)
+          if (saved) void check(saved.id, saved.document, historyOf(saved.id).length === 0 ? FIRST_CHECK[granularityOf(saved.document)] : 1)
         }}
         onCancel={() => {
           if (run) actions.cancel(run.executionId).catch((failure: unknown) => setError(errorMessage(failure)))
@@ -296,7 +301,7 @@ export default function App({ ctx }: { ctx: PluginContext }) {
     )
   }
 
-  // Each watch with its latest week and how that week reads: alerts first, the largest change first.
+  // Each watch with its latest check and how it reads: alerts first, the largest change first.
   const listed = (watches ?? []).map(saved => {
     const latest = historyOf(saved.id)[0]
     return { saved, latest, tone: latest ? verdict(latest, saved.document).tone : 'none' }
@@ -333,7 +338,7 @@ export default function App({ ctx }: { ctx: PluginContext }) {
             <Activity size={24} aria-hidden />
             <h2>Watch a metric</h2>
             <p className="dm-muted">
-              Pick a metric such as ROAS or revenue. Each week it is compared with the eight weeks before, and an unusual week comes with the
+              Pick a metric such as ROAS or revenue. Each day, week, month or quarter it is compared with the eight before, and an unusual one comes with the
               channels, campaigns or countries that moved it.
             </p>
             <button className="button" onClick={() => go({ page: 'new' })}>
@@ -344,7 +349,6 @@ export default function App({ ctx }: { ctx: PluginContext }) {
           <>
             <div className="week-bar">
               <p className="flush">
-                {newest && <strong>Week of {formatRange(newest.from, newest.to)}</strong>}
                 <span className={attention.length > 0 ? 'attention' : 'dm-muted'}>
                   {attention.length} {attention.length === 1 ? 'needs' : 'need'} attention
                 </span>

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  analysisKey,
   breakdown,
   checkPeriod,
   DEVIATIONS,
@@ -383,4 +384,11 @@ test('a period without rows names its period', () => {
   assert.equal(check.value, null)
   assert.equal(check.reason, 'No cost this quarter, so ROAS is undefined.')
   assert.equal(check.text, 'ROAS, Q3 2026: No cost this quarter, so ROAS is undefined.')
+})
+
+test('saving a watch re-checks it only when its analysis changes, and a missing period is a week', () => {
+  assert.equal(analysisKey(roas), analysisKey({ ...roas, granularity: 'week' }))
+  assert.equal(analysisKey(roas), analysisKey({ ...roas, name: 'Return on ad spend', format: 'times', rise: 'good' }))
+  assert.notEqual(analysisKey(roas), analysisKey({ ...roas, granularity: 'month' }))
+  assert.equal(analysisKey({ ...roas, dimensions: ['country', 'channel'] }), analysisKey({ ...roas, dimensions: ['channel', 'country'] }))
 })
