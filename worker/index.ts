@@ -1,7 +1,7 @@
 import { docs_v1 } from '@googleapis/docs'
 import { sheets_v4 } from '@googleapis/sheets'
 import { createBackend, exactCredential, type BackendActionContext } from '@owox/plugin-sdk/server'
-import { CHART_PATH, CHART_WEEKS, chartLink, chartOf, chartSvg, chartWeeks, type ChartData } from './chart'
+import { CHART_PATH, CHART_PERIODS, chartLink, chartOf, chartSvg, chartWeeks, type ChartData } from './chart'
 import { docRequests, sheetCells, sheetRow, weekLink } from './google'
 import { png } from './png'
 import { asOfFor, firstDayFor, granularityOf, shiftDay, shiftPeriod } from './period'
@@ -82,9 +82,10 @@ async function chartOfCheck(ctx: BackendActionContext, check: Check, watch: Watc
     history.push(...page.items.map(item => item.document).filter(item => item.watchId === check.watchId && item.asOf <= check.asOf))
     cursor = page.nextCursor
   } while (cursor)
-  const recent = history.sort((a, b) => a.asOf.localeCompare(b.asOf)).slice(-CHART_WEEKS)
+  const recent = history.sort((a, b) => a.asOf.localeCompare(b.asOf)).slice(-CHART_PERIODS)
   return {
     format: watch.format,
+    granularity: granularityOf(watch),
     places: placesOf(check, watch),
     weeks: chartWeeks(recent, watch),
     selected: recent.findIndex(item => item.asOf === check.asOf),

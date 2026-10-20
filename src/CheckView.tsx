@@ -16,8 +16,8 @@ import {
   type Watch,
   type Week,
 } from '../worker/watch'
-import { formatRange } from '../worker/period'
-import { chartLayout, chartWeeks, shortDay } from '../worker/chart'
+import { formatRange, granularityOf, shortLabel } from '../worker/period'
+import { chartLayout, chartWeeks } from '../worker/chart'
 
 /** `15 Oct, 16:29` in the member's time zone. */
 export function CheckedAt({ iso }: { iso: string }) {
@@ -116,7 +116,7 @@ export function HistoryChart({
           width={width}
           height={CHART_HEIGHT}
           role="img"
-          aria-label={`${watch.name} by week: ${checks.map(check => `${shortDay(check.from)} ${formatMetric(check.value, watch, places)}`).join(', ')}`}
+          aria-label={`${watch.name} by week: ${checks.map(check => `${shortLabel(granularityOf(watch), check.from)} ${formatMetric(check.value, watch, places)}`).join(', ')}`}
           onPointerMove={event => setHover(indexAt(event))}
           onPointerLeave={() => setHover(null)}
           onClick={event => onSelect(checks[indexAt(event)].asOf)}
@@ -146,7 +146,7 @@ export function HistoryChart({
           {checks.map((check, i) =>
             layout.dated(i) ? (
               <text key={check.asOf} className={i === at ? 'tick current' : 'tick'} x={x(i)} y={CHART_HEIGHT - 6} textAnchor="middle">
-                {shortDay(check.from)}
+                {shortLabel(granularityOf(watch), check.from)}
               </text>
             ) : null,
           )}
@@ -222,7 +222,7 @@ export function WeekStrip({
           >
             <span className="week-day">
               <i className={`dot ${result.tone}`} aria-hidden />
-              {shortDay(check.from)}
+              {shortLabel(granularityOf(watch), check.from)}
             </span>
             <span className="week-value">{formatMetric(check.value, watch, places)}</span>
             <Change value={check.change} tone={result.tone} />

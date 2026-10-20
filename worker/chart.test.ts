@@ -42,3 +42,17 @@ test('the chart draws each usual range, every point and the alert in red', () =>
   assert.doesNotMatch(svg, />20 Jul</)
   assert.equal(chartSvg({ ...data, weeks: weeks.map(week => ({ ...week, value: null, usual: null })) }), null)
 })
+
+test('a month chart labels its months and its link keeps the period', async () => {
+  const months = weeks.map((week, i) => ({ ...week, from: `2026-${String(i + 1).padStart(2, '0')}-01` }))
+  const monthly: ChartData = { ...data, weeks: months, granularity: 'month' }
+  const svg = chartSvg(monthly)!
+  // Every other label, ending on the newest month.
+  assert.match(svg, />Dec</)
+  assert.match(svg, />Oct</)
+  assert.doesNotMatch(svg, />Nov</)
+  const read = await chartOf(new URL(await chartLink('https://plugin.example', monthly, 'secret', now)), 'secret', now)
+  assert.equal(read?.granularity, 'month')
+  const weekly = await chartOf(new URL(await chartLink('https://plugin.example', data, 'secret', now)), 'secret', now)
+  assert.equal(weekly?.granularity, undefined)
+})

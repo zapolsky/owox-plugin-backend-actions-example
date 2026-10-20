@@ -1,7 +1,8 @@
+import { granularityOf, shortLabel, type Granularity } from './period.ts'
 import { formatMetric, verdict, type Check, type Format, type Verdict, type Watch } from './watch.ts'
 
-/** Weeks a chart shows, on the page and in a Doc. */
-export const CHART_WEEKS = 12
+/** Periods a chart shows, on the page and in a Doc. */
+export const CHART_PERIODS = 12
 
 /** One week of the chart: its value over its own usual range, coloured by what it means. */
 export type ChartWeek = {
@@ -17,6 +18,8 @@ export type ChartData = {
   weeks: ChartWeek[]
   /** The highlighted week, -1 for none. */
   selected: number
+  /** Labels the periods; a week when unset. */
+  granularity?: Granularity
 }
 
 /** The chart's weeks of checks, oldest first. A change rule ignores the usual range, so it is not drawn. */
@@ -27,14 +30,6 @@ export const chartWeeks = (checks: Check[], watch: Watch): ChartWeek[] =>
     usual: watch.rule.kind === 'unusual' ? check.usual : null,
     tone: verdict(check, watch).tone,
   }))
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-
-/** `8 Oct`. */
-export const shortDay = (day: string) => {
-  const date = new Date(`${day}T00:00:00Z`)
-  return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]}`
-}
 
 /** Steps of 1, 2, 2.5 or 5 times a power of ten, about four of them between `min` and `max`. */
 function ticks(min: number, max: number): number[] {
@@ -106,7 +101,7 @@ export function chartSvg(data: ChartData, width = 640, height = 260): string | n
     if (!layout.dated(i)) return
     const current = i === data.selected
     parts.push(
-      `<text x="${x(i)}" y="${height - 6}" text-anchor="middle" font-size="11" fill="${current ? COLORS.current : COLORS.tick}"${current ? ' font-weight="500"' : ''}>${shortDay(week.from)}</text>`,
+      `<text x="${x(i)}" y="${height - 6}" text-anchor="middle" font-size="11" fill="${current ? COLORS.current : COLORS.tick}"${current ? ' font-weight="500"' : ''}>${shortLabel(granularityOf(data), week.from)}</text>`,
     )
   })
   const line = layout.points.map(point => `${x(point.i)},${y(point.value)}`).join(' ')
@@ -137,7 +132,7 @@ const hmacKey = (secret: string) =>
 /** A link to the chart as a PNG on this Worker, signed so that nobody else can draw with it. */
 export async function chartLink(origin: string, data: ChartData, secret: string, now = Date.now()): Promise<string> {
   const weeks = data.weeks.map(week => [week.from, round(week.value), round(week.usual?.low), round(week.usual?.high), TONES.indexOf(week.tone)])
-  const payload = base64url(new TextEncoder().encode(JSON.stringify([data.format ?? null, data.places, data.selected, weeks])))
+  const payload = base64url(new TextEncoder().encode(JSON.stringify([data.format ?? null, data.places, data.selected, weeks, data.granularity ?? null])))
   const expires = String(now + CHART_LINK_MS)
   const signature = await crypto.subtle.sign('HMAC', await hmacKey(secret), new TextEncoder().encode(`${payload}.${expires}`))
   return `${origin}${CHART_PATH}?d=${payload}&e=${expires}&s=${base64url(new Uint8Array(signature))}`
@@ -150,10 +145,11 @@ export async function chartOf(url: URL, secret: string, now = Date.now()): Promi
   try {
     const signed = await crypto.subtle.verify('HMAC', await hmacKey(secret), unbase64url(signature), new TextEncoder().encode(`${payload}.${expires}`))
     if (!signed) return null
-    const [format, places, selected, weeks] = JSON.parse(new TextDecoder().decode(unbase64url(payload)))
+    const [format, places, selected, weeks, granularity] = JSON.parse(new TextDecoder().decode(unbase64url(payload)))
     return {
       format: format ?? undefined,
       places,
+      granularity: granularity ?? undefined,
       selected,
       weeks: (weeks as [string, number | null, number | null, number | null, number][]).map(([from, value, low, high, tone]) => ({
         from,
