@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { docRequests, exportTarget, LINK_TEXT, sheetCells, sheetRow, weekLink } from './google.ts'
+import { docRequests, exportFailure, exportLink, exportTarget, exportToOf, LINK_TEXT, periodLink, sheetCells, sheetRow } from './google.ts'
 import type { Check, Watch } from './watch.ts'
 
 test('a Doc link exports to the Doc and a Sheet link to the Sheet', () => {
@@ -59,10 +59,10 @@ test('a Sheet row keeps its values as they are and ends with a link under words'
   assert.equal(sheetCells(['ROAS'], null).length, 1)
 })
 
-test('a week links to the plugin page that shows it', () => {
+test('a period links to the plugin page that shows it', () => {
   assert.equal(
-    weekLink('https://app.owox.com', 'p1', 'plug 1', { watchId: 'w/1', asOf: '2026-10-15' }),
-    'https://app.owox.com/ui/p1/plugins/plug%201/open/watches/w%2F1/weeks/2026-10-15',
+    periodLink('https://app.owox.com', 'p1', 'plug 1', { watchId: 'w/1', asOf: '2026-10-15' }),
+    'https://app.owox.com/ui/p1/plugins/plug%201/open/watches/w%2F1/periods/2026-10-15',
   )
 })
 
@@ -80,4 +80,32 @@ test('a Doc gets the text, then the chart, then the link, each at the index the 
   assert.equal(linkOnly[2].insertText?.text, LINK_TEXT)
   assert.deepEqual(linkOnly[3].updateTextStyle?.range, { startIndex: 40 + text.length, endIndex: 40 + text.length + LINK_TEXT.length })
   assert.equal(docRequests(40, check, null, null).length, 2)
+})
+
+test("a schedule's export target shows back as a link that exports to the same place", () => {
+  assert.equal(exportLink({ watchId: 'w1' }), '')
+  assert.equal(exportLink(null), '')
+  assert.equal(exportLink({ watchId: 'w1', documentId: 7 }), '')
+  assert.deepEqual(exportTarget(exportLink({ watchId: 'w1', documentId: 'abc_D-1' }))?.input, { documentId: 'abc_D-1' })
+  assert.deepEqual(exportTarget(exportLink({ watchId: 'w1', spreadsheetId: 'xyz-2' }))?.input, { spreadsheetId: 'xyz-2' })
+})
+
+test('a check goes to a Doc or a Sheet, never both', () => {
+  assert.equal(exportToOf({}), null)
+  assert.deepEqual(exportToOf({ documentId: 'd1' }), { kind: 'Doc', documentId: 'd1' })
+  assert.deepEqual(exportToOf({ spreadsheetId: 's1' }), { kind: 'Sheet', spreadsheetId: 's1' })
+  assert.throws(() => exportToOf({ documentId: 'd1', spreadsheetId: 's1' }), { code: 'INVALID_EXPORT' })
+})
+
+test('a failed export says what was saved, keeps a missing credential its own code and fits the host', () => {
+  const missing = Object.assign(new Error('Choose a Google Service Account Credential.'), { code: 'GOOGLE_NOT_CONFIGURED' })
+  assert.deepEqual(exportFailure('Sep 2026', 'Doc', missing), {
+    code: 'GOOGLE_NOT_CONFIGURED',
+    message: 'Checked Sep 2026, but could not add it to the Doc: Choose a Google Service Account Credential.',
+  })
+  const long = exportFailure('Q3 2026', 'Sheet', new Error('x'.repeat(5000)))
+  assert.equal(long.code, 'EXPORT_FAILED')
+  assert.equal(long.message.length, 1000)
+  assert.ok(long.message.startsWith('Checked Q3 2026, but could not add it to the Sheet: x'))
+  assert.equal(exportFailure('19 Oct 2026', 'Doc', 'refused').message, 'Checked 19 Oct 2026, but could not add it to the Doc: refused')
 })

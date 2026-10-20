@@ -2,7 +2,7 @@ import { docs_v1 } from '@googleapis/docs'
 import { sheets_v4 } from '@googleapis/sheets'
 import { createBackend, exactCredential, type BackendActionContext } from '@owox/plugin-sdk/server'
 import { CHART_PATH, CHART_PERIODS, chartLink, chartOf, chartSvg, chartWeeks, type ChartData } from './chart'
-import { docRequests, sheetCells, sheetRow, weekLink } from './google'
+import { docRequests, periodLink, sheetCells, sheetRow } from './google'
 import { png } from './png'
 import { asOfFor, firstDayFor, granularityOf, shiftDay, shiftPeriod } from './period'
 import { checkPeriod, missingColumnsMessage, placesOf, type Check, type SumRow, type Watch } from './watch'
@@ -92,9 +92,9 @@ async function chartOfCheck(ctx: BackendActionContext, check: Check, watch: Watc
   }
 }
 
-/** A link to a check's week on the plugin's page in OWOX. */
+/** A link to a check's period on the plugin's page in OWOX. */
 const linkOf = (ctx: BackendActionContext, check: Check) =>
-  weekLink(ctx.host, ctx.execution.projectId, ctx.execution.plugin.id, check)
+  periodLink(ctx.host, ctx.execution.projectId, ctx.execution.plugin.id, check)
 
 const backend = (charts: Charts) => createBackend({
   // This repository on GitHub: OWOX runs nothing here for an execution of another plugin.
