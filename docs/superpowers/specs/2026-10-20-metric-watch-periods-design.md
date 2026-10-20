@@ -32,6 +32,11 @@ period overwrites the same check:
 A week keeps today's rolling definition so that existing checks keep their ids; a scheduled run on
 Monday covers Monday to Sunday.
 
+A run's today is the date in the member's time zone: the page and the schedule pass `timeZone`.
+Without it, or for a zone the Worker does not know, the Worker takes today in UTC, as before. In
+UTC alone, a schedule at 09:00 on the 1st in Sydney runs on the last day of the month before and
+would check the month before last.
+
 `periodAt(granularity, asOf, k)` replaces `weekAt(asOf, k)`: the `k`-th period before `asOf`,
 `{ from, to }`. `shiftPeriod(granularity, asOf, n)` moves `asOf` by `n` periods and replaces
 `shiftDay(asOf, -7 * n)` where a run checks several periods. The `asOf` of a month or quarter is
@@ -70,6 +75,7 @@ always the 1st, so moving it by calendar months is exact.
   "watchId": "string, required",
   "periods": "integer 1–14, how many periods back to check; 1 when unset",
   "weeks": "integer 1–12, the old name of periods, still accepted",
+  "timeZone": "string, the member's IANA time zone, in which the run's today is taken",
   "documentId": "string, a Doc to add the newest check to",
   "spreadsheetId": "string, a Sheet to add the newest check to"
 }
@@ -91,7 +97,9 @@ One schedule per watch, as now, at 09:00 in the member's time zone:
 | month | `0 9 1 * *` | `Monthly check of <watch>` | Monthly |
 | quarter | `0 9 1 1,4,7,10 *` | `Quarterly check of <watch>` | Quarterly |
 
-- Saving a watch with a new period updates its schedule's cron and name through
+- A new schedule's parameters are `{ watchId, timeZone }`, the zone the schedule runs in. A
+  schedule saved before periods has only `watchId` and keeps checking by UTC.
+- Saving a watch with a new period or name updates its schedule's cron and name through
   `ctx.schedules.update`. The schedule's pause, time zone and export target stay.
 - The schedule popover says when it runs: `Every day at 09:00`, `Every Monday at 09:00`,
   `On the 1st of each month at 09:00`, `On the 1st of Jan, Apr, Jul and Oct at 09:00`, with the
@@ -101,9 +109,9 @@ One schedule per watch, as now, at 09:00 in the member's time zone:
 ## Scheduled export
 
 - The schedule popover has a field "Also add each check to", which takes a Google Doc or Sheet link
-  and parses it with `exportTarget`. Creating a schedule saves it in the parameters as
-  `{ watchId, documentId }` or `{ watchId, spreadsheetId }`; on an existing schedule, Save updates
-  the parameters and an emptied field removes the target.
+  and parses it with `exportTarget`. Creating a schedule adds it to the parameters as
+  `documentId` or `spreadsheetId`; on an existing schedule, Save updates the parameters and an
+  emptied field removes the target.
 - After saving its checks, `check-metric` adds the newest one to the target exactly as
   `export-check-to-doc` and `export-check-to-sheet` do: in a Doc its text, its chart and a link
   back, in a Sheet one row. Both actions and the schedule call one function per target.
@@ -164,9 +172,10 @@ and keep working. On the dev stand this gap is acceptable; the release follows t
 
 ## Risks
 
-- `dateTrunc` with an aggregation has not been tried through HTTP Data on the stand. The first
-  implementation step reads one month-truncated sum from the demo Data Mart; if HTTP Data rejects
-  it, a month or quarter watch reads daily sums like a week, and its first check shrinks to stay
-  inside the action's 180 s.
+- `dateTrunc` with an aggregation has not run through HTTP Data on the stand. The host keeps a
+  truncated column's name as its alias (`renderAggregatedSelect` in owox-data-marts'
+  `sql-clause-renderer.ts`), so `row[dateColumn]` holds the period's first day. The stand checks
+  confirm it; if HTTP Data rejects it, a month or quarter watch reads daily sums like a week, and
+  its first check shrinks to stay inside the action's 180 s.
 - A quarter watch on a Data Mart with less than a year of data shows `Too little history` for its
   first quarters. This is correct: its usual range needs four earlier quarters with data.
