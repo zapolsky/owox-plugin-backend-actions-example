@@ -1,6 +1,6 @@
 {
   "name": "Metric Watch",
-  "description": "Watches a Data Mart metric week by week, flags weeks outside the usual range and explains which channels, campaigns or other values moved it",
+  "description": "Watches a Data Mart metric by day, week, month or quarter, flags periods outside the usual range and explains which channels, campaigns or other values moved it",
   "delivery": {
     "type": "remote",
     "url": "https://owox-plugin-backend-actions-example.e-zapolskiy.workers.dev/"
@@ -26,7 +26,11 @@
           "required": ["watchId"],
           "properties": {
             "watchId": { "type": "string", "minLength": 1, "maxLength": 100 },
-            "weeks": { "type": "integer", "minimum": 1, "maximum": 12 }
+            "periods": { "type": "integer", "minimum": 1, "maximum": 14 },
+            "weeks": { "type": "integer", "minimum": 1, "maximum": 12 },
+            "timeZone": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "documentId": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "spreadsheetId": { "type": "string", "minLength": 1, "maxLength": 200 }
           },
           "additionalProperties": false
         }

@@ -1,26 +1,29 @@
 # Agent instructions
 
 This is an example OWOX Data Marts plugin with backend actions: Metric Watch. A member picks a
-Data Mart metric, such as ROAS as the sum of revenue divided by the sum of cost, and the columns
-that explain it, such as channel, campaign and country, how its value reads and whether a rise is
-good or bad. The page starts `check-metric`; the Worker
-reads daily sums through HTTP Data, compares the last full week with the eight weeks before,
-splits the change between the values of each column and saves one check per week to the `checks`
+Data Mart metric, such as ROAS as the sum of revenue divided by the sum of cost, the columns that
+explain it, such as channel, campaign and country, its period (a day, a week, a month or a
+quarter), how its value reads and whether a rise is good or bad. The page starts `check-metric`;
+the Worker reads sums through HTTP Data, per day for a day or week watch and per month or quarter
+through `dateTrunc` for those, compares the last full period with the eight before it, splits the
+change between the values of each column and saves one check per period to the `checks`
 collection. A check started before the plugin closed is there when it reopens. On a host with
-schedules, a watch can be checked every Monday at 09:00 in the member's time zone with the plugin
-closed; a check records whether the page or the schedule started it. With an optional
+schedules, a watch can be checked after each period at 09:00 in the member's time zone with the
+plugin closed; a check records whether the page or the schedule started it. With an optional
 Google Service Account Credential, `export-check-to-doc` and `export-check-to-sheet` append a
-check to a Google Doc or Sheet with a link back to its week; OWOX adds the access token, so the
-key never reaches the Worker. The Doc also gets the week's chart: the Worker draws it as a PNG at a
-signed link that Docs fetches while the export runs.
+check to a Google Doc or Sheet with a link back to its period, and a schedule can append each check
+it makes; OWOX adds the access token, so the key never reaches the Worker. The Doc also gets the
+chart: the Worker draws it as a PNG at a signed link that Docs fetches while the export runs.
 One Cloudflare Worker serves the page from `dist/`, runs the actions at `/owox` and draws charts
 at `/chart.png`.
 
 - `src/`: the plugin page (Vite and React) on the authoring guide's UI foundation in
   `styles.css`, with Lucide icons. It saves watches through `ctx.collections`, starts checks
-  through `ctx.actions`, keeps a running check in the plugin route and keeps each watch's weekly
+  through `ctx.actions`, keeps a running check in the plugin route and keeps each watch's scheduled
   check in `ctx.schedules`.
 - `worker/index.ts`: the actions, built with `createBackend` from `@owox/plugin-sdk/server`.
+- `worker/period.ts`: a watch's periods: their windows, labels, words, schedules and the run's day
+  in the member's time zone; `worker/period.test.ts` tests them.
 - `worker/google.ts`: the export target of a Doc or Sheet link and what a check adds there;
   `worker/google.test.ts` tests the link.
 - `worker/chart.ts`: the chart of a watch's weeks, drawn by the page and as an SVG for a Doc, and

@@ -2,9 +2,9 @@ import { docs_v1 } from '@googleapis/docs'
 import { sheets_v4 } from '@googleapis/sheets'
 import { createBackend, exactCredential, type BackendActionContext } from '@owox/plugin-sdk/server'
 import { CHART_PATH, CHART_PERIODS, chartLink, chartOf, chartSvg, chartWeeks, type ChartData } from './chart'
-import { docRequests, periodLink, sheetCells, sheetRow } from './google'
+import { docRequests, exportFailure, exportToOf, periodLink, sheetCells, sheetRow } from './google'
 import { png } from './png'
-import { asOfFor, firstDayFor, granularityOf, shiftDay, shiftPeriod } from './period'
+import { asOfFor, firstDayFor, granularityOf, periodLabel, shiftDay, shiftPeriod, today, type Granularity } from './period'
 import { checkPeriod, missingColumnsMessage, placesOf, type Check, type SumRow, type Watch } from './watch'
 
 type Env = {
@@ -18,16 +18,20 @@ type Charts = { worker: string; key: string | null }
 const failure = (code: string, message: string) => Object.assign(new Error(message), { code })
 
 /**
- * Daily sums of the watched columns between two days, per combination of the watch's dimensions,
- * in one Data Mart run: totals and each dimension's split are summed from the same rows.
- * ponytail: rows grow with the product of the dimensions' values (days × channels × campaigns × …);
+ * Sums of the watched columns between two days, per day for a day or week watch and per month or
+ * quarter for those, per combination of the watch's dimensions, in one Data Mart run: totals and
+ * each dimension's split are summed from the same rows. A truncated date keeps its column's name,
+ * so each row's `day` is its period's first day.
+ * ponytail: rows grow with the product of the dimensions' values (periods × channels × campaigns × …);
  * fine for tens of thousands, switch back to one run per dimension for high-cardinality columns.
  */
-async function readSums(ctx: BackendActionContext, watch: Watch, from: string, to: string) {
+async function readSums(ctx: BackendActionContext, watch: Watch, from: string, to: string, granularity: Granularity) {
   const summed = [watch.numerator, ...(watch.denominator ? [watch.denominator] : [])]
+  const unit = granularity === 'month' ? 'MONTH' : granularity === 'quarter' ? 'QUARTER' : null
   const data = await ctx.owox.dataMarts.traverseData(watch.dataMartId, {
     column: [watch.dateColumn, ...watch.dimensions, ...summed],
     aggregation: summed.map(column => ({ column, function: 'SUM' as const })),
+    ...(unit ? { dateTrunc: [{ column: watch.dateColumn, unit }] } : {}),
     filter: [{ column: watch.dateColumn, operator: 'between', value: { from, to } }],
   })
   const totals: SumRow[] = []
@@ -96,13 +100,58 @@ async function chartOfCheck(ctx: BackendActionContext, check: Check, watch: Watc
 const linkOf = (ctx: BackendActionContext, check: Check) =>
   periodLink(ctx.host, ctx.execution.projectId, ctx.execution.plugin.id, check)
 
+/**
+ * Appends a check at the end of a Google Doc shared with the service account: its text, its chart
+ * and a link back to the period. Docs fetches the chart from this Worker while the request runs.
+ */
+async function addToDoc(ctx: BackendActionContext, charts: Charts, check: Check, documentId: string) {
+  const watch = (await ctx.collections<Watch>('watches').get(check.watchId))?.document
+  const docs = new docs_v1.Docs(googleOptions(ctx))
+  const chart = watch && charts.key ? await chartLink(charts.worker, await chartOfCheck(ctx, check, watch), charts.key) : null
+  const { data } = await docs.documents.get({ documentId, fields: 'body(content(endIndex))' })
+  const end = data.body?.content?.at(-1)?.endIndex ?? 1
+  await docs.documents.batchUpdate({
+    documentId,
+    requestBody: { requests: docRequests(end - 1, check, chart, linkOf(ctx, check)) },
+  })
+}
+
+/** Appends a check as one row of the first sheet of a Google Sheet shared with the service account. */
+async function addToSheet(ctx: BackendActionContext, check: Check, spreadsheetId: string) {
+  // The watch sets the value's decimal places and what the period means now.
+  const watch = await ctx.collections<Watch>('watches').get(check.watchId)
+  const sheets = new sheets_v4.Sheets(googleOptions(ctx))
+  const { data } = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(sheetId))' })
+  // Cells rather than values: only a cell can show a link under its own words.
+  const row = sheetCells(sheetRow(check, watch?.document), linkOf(ctx, check))
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{ appendCells: { sheetId: data.sheets?.[0]?.properties?.sheetId ?? 0, rows: [{ values: row }], fields: 'userEnteredValue,textFormatRuns' } }],
+    },
+  })
+}
+
 const backend = (charts: Charts) => createBackend({
   // This repository on GitHub: OWOX runs nothing here for an execution of another plugin.
   repositoryId: '1419740594',
   actions: {
-    /** Checks the last full week, and with `weeks` the weeks before it too, into the `checks` history. */
+    /**
+     * Checks the watch's last full period, and with `periods` the ones before it too, into the
+     * `checks` history; with a Doc or Sheet, adds the newest check there.
+     */
     'check-metric': async (input, ctx) => {
-      const { watchId, weeks = 1 } = input as { watchId: string; weeks?: number }
+      const { watchId, periods, weeks, timeZone, ...target } = input as {
+        watchId: string
+        periods?: number
+        /** The old name of `periods`, sent by a page opened before periods. */
+        weeks?: number
+        timeZone?: string
+        documentId?: string
+        spreadsheetId?: string
+      }
+      const exportTo = exportToOf(target)
+      const count = periods ?? weeks ?? 1
       const saved = await ctx.collections<Watch>('watches').get(watchId)
       if (!saved) throw failure('WATCH_NOT_FOUND', 'This watch no longer exists.')
       const watch = saved.document
@@ -110,11 +159,11 @@ const backend = (charts: Charts) => createBackend({
       if (!dataMart) throw failure('DATA_MART_NOT_FOUND', 'This Data Mart is not available to you.')
 
       const granularity = granularityOf(watch)
-      const asOf = asOfFor(granularity, new Date().toISOString().slice(0, 10))
-      const [from, to] = [firstDayFor(granularity, asOf, weeks), shiftDay(asOf, -1)]
+      const asOf = asOfFor(granularity, today(timeZone))
+      const [from, to] = [firstDayFor(granularity, asOf, count), shiftDay(asOf, -1)]
       let sums: Awaited<ReturnType<typeof readSums>>
       try {
-        sums = await readSums(ctx, watch, from, to)
+        sums = await readSums(ctx, watch, from, to, granularity)
       } catch (error) {
         if (ctx.signal.aborted) throw error
         const missing = await missingColumns(ctx, watch).catch(() => [])
@@ -129,48 +178,38 @@ const backend = (charts: Charts) => createBackend({
       // Saved by the Worker, so a check started before the plugin closed is there when it reopens.
       const checkedAt = new Date().toISOString()
       const history = ctx.collections<Check>('checks')
-      for (let k = 0; k < weeks; k++) {
-        const check = checkPeriod(watchId, watch, shiftPeriod(granularity, asOf, -k), totals, byDimension, checkedAt)
-        await history.put(`${watchId}~${check.asOf}`, { ...check, trigger: ctx.execution.trigger })
+      let newest: Check | null = null
+      for (let k = 0; k < count; k++) {
+        const check = { ...checkPeriod(watchId, watch, shiftPeriod(granularity, asOf, -k), totals, byDimension, checkedAt), trigger: ctx.execution.trigger }
+        await history.put(`${watchId}~${check.asOf}`, check)
+        newest ??= check
       }
-      return { checked: weeks }
+
+      // After saving, so a failed export loses no check; the run fails so that the member sees it.
+      if (exportTo && newest) {
+        try {
+          if (exportTo.kind === 'Doc') await addToDoc(ctx, charts, newest, exportTo.documentId)
+          else await addToSheet(ctx, newest, exportTo.spreadsheetId)
+        } catch (error) {
+          if (ctx.signal.aborted) throw error
+          const { code, message } = exportFailure(periodLabel(granularity, newest.from, newest.to), exportTo.kind, error)
+          throw failure(code, message)
+        }
+      }
+      return { checked: count }
     },
 
-    /**
-     * Appends a check at the end of a Google Doc shared with the service account: its text, its chart
-     * and a link back to the week. Docs fetches the chart from this Worker while the request runs.
-     */
+    /** Appends a check at the end of a Google Doc shared with the service account. */
     'export-check-to-doc': async (input, ctx) => {
       const { checkId, documentId } = input as { checkId: string; documentId: string }
-      const check = await savedCheck(ctx, checkId)
-      const watch = (await ctx.collections<Watch>('watches').get(check.watchId))?.document
-      const docs = new docs_v1.Docs(googleOptions(ctx))
-      const chart = watch && charts.key ? await chartLink(charts.worker, await chartOfCheck(ctx, check, watch), charts.key) : null
-      const { data } = await docs.documents.get({ documentId, fields: 'body(content(endIndex))' })
-      const end = data.body?.content?.at(-1)?.endIndex ?? 1
-      await docs.documents.batchUpdate({
-        documentId,
-        requestBody: { requests: docRequests(end - 1, check, chart, linkOf(ctx, check)) },
-      })
+      await addToDoc(ctx, charts, await savedCheck(ctx, checkId), documentId)
       return { documentId }
     },
 
     /** Appends a check as one row of the first sheet of a Google Sheet shared with the service account. */
     'export-check-to-sheet': async (input, ctx) => {
       const { checkId, spreadsheetId } = input as { checkId: string; spreadsheetId: string }
-      const check = await savedCheck(ctx, checkId)
-      // The watch sets the value's decimal places and what the week means now.
-      const watch = await ctx.collections<Watch>('watches').get(check.watchId)
-      const sheets = new sheets_v4.Sheets(googleOptions(ctx))
-      const { data } = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(sheetId))' })
-      // Cells rather than values: only a cell can show a link under its own words.
-      const row = sheetCells(sheetRow(check, watch?.document), linkOf(ctx, check))
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [{ appendCells: { sheetId: data.sheets?.[0]?.properties?.sheetId ?? 0, rows: [{ values: row }], fields: 'userEnteredValue,textFormatRuns' } }],
-        },
-      })
+      await addToSheet(ctx, await savedCheck(ctx, checkId), spreadsheetId)
       return { spreadsheetId }
     },
   },
