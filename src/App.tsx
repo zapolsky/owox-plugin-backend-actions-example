@@ -176,7 +176,9 @@ export default function App({ ctx }: { ctx: PluginContext }) {
     const schedule = scheduleOf(id)
     const wanted = scheduleFor(watch)
     if (schedule && (schedule.cron !== wanted.cron || schedule.name !== wanted.name)) {
-      await ctx.schedules?.update(schedule.id, wanted)
+      // The host replaces parameters wholesale; an old schedule has no zone, so it gets its own.
+      const parameters = { timeZone: schedule.timeZone, ...(schedule.parameters as object) }
+      await ctx.schedules?.update(schedule.id, schedule.cron !== wanted.cron ? { ...wanted, parameters } : wanted)
     }
     await reload()
     go({ page: 'watch', watchId: id })

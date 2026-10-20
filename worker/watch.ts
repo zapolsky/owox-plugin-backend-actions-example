@@ -37,7 +37,7 @@ export type Watch = {
   granularity?: Granularity
 }
 
-/** Sums for one day, and for one value of a dimension when `segment` is set. */
+/** Sums for one day, or one period's for a month or quarter watch, and for one value of a dimension when `segment` is set. */
 export type SumRow = { day: string; segment?: string; numerator: number; denominator: number }
 
 /** A checked period; named for the weekly first version. */
@@ -56,7 +56,7 @@ export type Segment = {
 
 export type Breakdown = { dimension: string; segments: Segment[] }
 
-/** One checked week, saved in the `checks` collection as `<watchId>~<asOf>`. */
+/** One checked period, saved in the `checks` collection as `<watchId>~<asOf>`. */
 export type Check = {
   watchId: string
   name: string

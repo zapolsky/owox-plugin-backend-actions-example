@@ -98,7 +98,8 @@ One schedule per watch, as now, at 09:00 in the member's time zone:
 | quarter | `0 9 1 1,4,7,10 *` | `Quarterly check of <watch>` | Quarterly |
 
 - A new schedule's parameters are `{ watchId, timeZone }`, the zone the schedule runs in. A
-  schedule saved before periods has only `watchId` and keeps checking by UTC.
+  schedule saved before periods has only `watchId` and checks by UTC until its
+  watch's period changes; then the update also writes its own time zone into its parameters.
 - Saving a watch with a new period or name updates its schedule's cron and name through
   `ctx.schedules.update`. The schedule's pause, time zone and export target stay.
 - The schedule popover says when it runs: `Every day at 09:00`, `Every Monday at 09:00`,

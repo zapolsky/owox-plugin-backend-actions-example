@@ -26,10 +26,10 @@ at `/chart.png`.
   in the member's time zone; `worker/period.test.ts` tests them.
 - `worker/google.ts`: the export target of a Doc or Sheet link and what a check adds there;
   `worker/google.test.ts` tests the link.
-- `worker/chart.ts`: the chart of a watch's weeks, drawn by the page and as an SVG for a Doc, and
+- `worker/chart.ts`: the chart of a watch's periods, drawn by the page and as an SVG for a Doc, and
   its signed link; `worker/chart.test.ts` tests them. `worker/png.ts` turns the SVG into a PNG
   with resvg and the Roboto fonts in `vendor/fonts` (SIL Open Font License, `vendor/fonts/OFL.txt`).
-- `worker/watch.ts`: the usual range, the verdict of a week, the split of a change, the words that
+- `worker/watch.ts`: the usual range, the verdict of a period, the split of a change, the words that
   explain it and how a value reads; `worker/watch.test.ts` tests them.
 - `plugin.json`: the manifest. OWOX reads it from the release commit. Within a compatibility line a
   release may add actions but must not remove one.
