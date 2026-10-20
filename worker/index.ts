@@ -32,7 +32,11 @@ async function readSums(ctx: BackendActionContext, watch: Watch, from: string, t
     column: [watch.dateColumn, ...watch.dimensions, ...summed],
     aggregation: summed.map(column => ({ column, function: 'SUM' as const })),
     ...(unit ? { dateTrunc: [{ column: watch.dateColumn, unit }] } : {}),
-    filter: [{ column: watch.dateColumn, operator: 'between', value: { from, to } }],
+    // `to` is the last day, and a TIMESTAMP column compared with a date stops at its midnight.
+    filter: [
+      { column: watch.dateColumn, operator: 'gte', value: from },
+      { column: watch.dateColumn, operator: 'lt', value: shiftDay(to, 1) },
+    ],
   })
   const totals: SumRow[] = []
   const byDimension: Record<string, SumRow[]> = Object.fromEntries(watch.dimensions.map(dimension => [dimension, []]))
